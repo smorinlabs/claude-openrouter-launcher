@@ -93,7 +93,7 @@ the existing modes. Clean-break config schema; default mode becomes `extreme`.
 
 ---
 
-## [~] Project P04: rename to "Claude OpenRouter Launcher" (v0.4.0)
+## [x] Project P04: rename to "Claude OpenRouter Launcher" (v0.4.0)
 **Goal/Requirement**: Rebrand the product/tooling from "fusion" to OpenRouter (the tool is
 no longer Fusion-specific), while keeping the OpenRouter **Fusion router** references
 (the `fusion` profile, `cc-fusion` preset, `openrouter/fusion`, `openrouter:fusion`) intact.
@@ -113,7 +113,7 @@ Full, clean-break rename (no aliases). Breaking change.
 - [x] [P04-T02] State dir + `CLAUDE_OPENROUTER_CONFIG` env + `col_`/`COL_` identifiers; README/PROJECTS/.flox/.claude announcement
 - [x] [P04-TS01] `tests/smoke.sh` renamed in lockstep; shellcheck clean; `just all` → `smoke: ALL PASS`
 - [x] [P04-T03] Tag v0.3.0 (pre-rename); GitHub repo rename + remote update
-- [ ] [P04-T04] Merge PR; tag v0.4.0
+- [x] [P04-T04] Merge PR; tag v0.4.0
 
 ### Automated Verification
 - `make check`, then `just all` (shellcheck + smoke) pass.
