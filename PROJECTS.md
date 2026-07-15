@@ -72,13 +72,13 @@ the existing modes. Clean-break config schema; default mode becomes `extreme`.
 - Per-profile `default_mode`.
 
 ### Tests & Tasks
-- [ ] [P03-T01] Config schema (`profiles` catalog, `default_profile`/`default_mode`) + `lib/common.sh` resolvers (`col_resolve_profile/_mode`, `col_profile_type`, `col_backend_ref`, per-slug `col_preset_ready`, `col_render_settings` with `"backend"` keyword)
-- [ ] [P03-T02] `setup.sh`: per-fusion-profile preset creation (all by default, `--profile` for one), per-slug markers, model-profile skip
-- [ ] [P03-T03] `bin/claude-openrouter`: `--profile`/`--backend`, `profiles` subcommand, `extreme` default, mutual exclusion, profile-aware preset warning, richer `--show-settings`; `just run` default → extreme
-- [ ] [P03-T04] `col_doctor`: per-fusion-profile preset + drift, profiles summary
-- [ ] [P03-T05] README Profiles section + upgrade note; PROJECTS.md
-- [ ] [P03-TS01] `tests/smoke.sh`: profile/backend resolution (all 3 flavors), mode×profile render, default precedence, `--profile`/`--backend` mutual exclusion, multi-profile setup + markers, profile-aware doctor
-- [ ] [P03-TS02] Live verification: `--profile deepseek -p "..." --output-format json` shows the deepseek slug; `./setup.sh` creates all fusion presets
+- [x] [P03-T01] Config schema (`profiles` catalog, `default_profile`/`default_mode`) + `lib/common.sh` resolvers (`col_resolve_profile/_mode`, `col_profile_type`, `col_backend_ref`, per-slug `col_preset_ready`, `col_render_settings` with `"backend"` keyword)
+- [x] [P03-T02] `setup.sh`: per-fusion-profile preset creation (all by default, `--profile` for one), per-slug markers, model-profile skip
+- [x] [P03-T03] `bin/claude-openrouter`: `--profile`/`--backend`, `profiles` subcommand, `extreme` default, mutual exclusion, profile-aware preset warning, richer `--show-settings`; `just run` default → extreme
+- [x] [P03-T04] `col_doctor`: per-fusion-profile preset + drift, profiles summary
+- [x] [P03-T05] README Profiles section + upgrade note; PROJECTS.md
+- [x] [P03-TS01] `tests/smoke.sh`: profile/backend resolution (all 3 flavors), mode×profile render, default precedence, `--profile`/`--backend` mutual exclusion, multi-profile setup + markers, profile-aware doctor
+- [x] [P03-TS02] Live verification: `--profile deepseek -p "..." --output-format json` shows the deepseek slug; `./setup.sh` creates all fusion presets
 
 ### Automated Verification
 - `make check`, then `just all` (shellcheck + smoke) pass.
