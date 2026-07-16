@@ -736,6 +736,68 @@ else
   bad "models: no match -> stderr + exit 1" "rc=$nm_rc jsonrc=$nmj_rc err=$nm_err json=$nmj"
 fi
 
+# 28d. 'providers' — who serves a model, at what ctx/price/uptime. Stub the endpoints
+#      payload with a deliberate spread so each sort is distinguishable.
+#      NOTE: OpenRouter returns throughput/latency as null on this endpoint (verified
+#      live across several models), so there is no speed column — uptime is the signal.
+provbin="$tmpstate/provbin"; mkdir -p "$provbin"
+cat > "$provbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */models/zed/nope/endpoints) exit 22 ;;
+  */endpoints)
+    cat <<'JSON'
+{"data":{"endpoints":[
+ {"tag":"zeta/fp8","context_length":131072,"pricing":{"prompt":"0.000003","completion":"0.00001"},"uptime_last_30m":91.2,"throughput_last_30m":null},
+ {"tag":"alpha/fp4","context_length":1048576,"pricing":{"prompt":"0.0000009","completion":"0.000003"},"uptime_last_30m":99.94,"throughput_last_30m":null},
+ {"tag":"mid","context_length":262144,"pricing":{"prompt":"0.000002","completion":"0.000005"},"uptime_last_30m":97.0,"throughput_last_30m":null}
+]}}
+JSON
+    ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$provbin/curl"
+run_prov() { env -u OPENROUTER_API_KEY PATH="$provbin:$PATH" bin/claude-openrouter providers "$@" 2>&1; }
+first_tag() { run_prov "$@" | sed -n '2p' | awk '{print $1}'; }
+
+v_out="$(run_prov acme/model)"
+# default alpha; renders ctx + per-1M price + uptime; no dead speed column; pin hint
+# shellcheck disable=SC2016  # $0.90/$3.00 is a literal price string, not an expansion
+if [[ "$(first_tag acme/model)" = "alpha/fp4" && "$v_out" == *"3 serving"* && "$v_out" == *"1.0M ctx"* \
+   && "$v_out" == *'$0.90/$3.00 per 1M'* && "$v_out" == *"99.9% up"* \
+   && "$v_out" != *"tok/s"* && "$v_out" == *"provider"*"only"* ]]; then
+  ok "providers: default alpha + ctx/price/uptime + pin hint"
+else
+  bad "providers: default alpha + ctx/price/uptime + pin hint" "$v_out"
+fi
+
+# each sort orders by its own key (and they differ from one another)
+if [ "$(first_tag acme/model --sort cheapest)" = "alpha/fp4" ] \
+  && [ "$(first_tag acme/model --sort expensive)" = "zeta/fp8" ] \
+  && [ "$(first_tag acme/model --sort reliable)" = "alpha/fp4" ] \
+  && [ "$(first_tag acme/model --sort alpha)" = "alpha/fp4" ]; then
+  ok "providers: --sort cheapest/expensive/reliable"
+else
+  bad "providers: --sort" "cheap=$(first_tag acme/model --sort cheapest) exp=$(first_tag acme/model --sort expensive) rel=$(first_tag acme/model --sort reliable)"
+fi
+
+# --json passthrough, missing-slug and bad-sort rejection, unknown model
+vj="$(env -u OPENROUTER_API_KEY PATH="$provbin:$PATH" bin/claude-openrouter providers acme/model --json 2>/dev/null)"
+v_noslug="$(run_prov)"; v_noslug_rc=$?
+v_badsort="$(run_prov acme/model --sort fastest)"; v_badsort_rc=$?
+v_404="$(run_prov zed/nope)"; v_404_rc=$?
+if [ "$(printf '%s' "$vj" | jq -r 'length')" = "3" ] \
+  && [ "$v_noslug_rc" -ne 0 ] && [[ "$v_noslug" == *"needs a model slug"* ]] \
+  && [ "$v_badsort_rc" -ne 0 ] && [[ "$v_badsort" == *"unknown --sort 'fastest'"* ]] \
+  && [ "$v_404_rc" -ne 0 ] && [[ "$v_404" == *"no providers found"* ]]; then
+  ok "providers: --json + arg/sort/404 errors"
+else
+  bad "providers: --json + arg/sort/404 errors" "json=$vj noslug=$v_noslug badsort=$v_badsort 404=$v_404"
+fi
+
 # 29. 'presets' — account listing cross-referenced against config profiles:
 #     linked / orphan (on account, unreferenced) / missing (referenced, absent upstream).
 prebin="$tmpstate/presets-bin"; mkdir -p "$prebin"

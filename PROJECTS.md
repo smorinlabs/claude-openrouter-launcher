@@ -173,3 +173,36 @@ Neither `profiles` (config-side) nor `doctor` (only checks referenced presets) c
 ### Manual Verification
 - `bin/claude-openrouter presets --key-file ~/.config/smorin/.env` → links `cc-fusion`→`fusion`,
   `cc-glm-fireworks`→`glm-fireworks`, and flags the `cc-fusion-probe` orphan.
+
+---
+
+## [x] Project P06: providers command (v0.6.0)
+**Goal/Requirement**: Add `providers <slug>` — list who serves a model and at what
+context/price/uptime. Supplies the `tag` you pin in a `preset` profile's
+`provider.only`, and exposes the per-provider spread the model summary hides (the same
+slug can be served at 10× different context and 3× different price). Public endpoint —
+no key. Sorts: `alpha` (default), `cheapest`, `expensive`, `reliable`.
+
+**Out of Scope**
+- Throughput/latency columns and a `fastest` sort: OpenRouter returns
+  `throughput_last_30m` / `latency_last_30m` as **null** on this endpoint (verified live
+  across GLM 5.2, GPT-4o-mini, Llama 3.3, DeepSeek v3.2 — 0 non-null of 57 endpoints).
+  `uptime_last_30m` IS populated and is used instead. Revisit if OpenRouter populates them.
+- Writing/creating presets from this command (that stays in `setup.sh`).
+
+### Tests & Tasks
+- [x] [P06-T01] `col_list_providers <slug> <sort> <json>` in `lib/common.sh`; shared
+      `COL_JQ_FMT` jq helpers factored out of `col_list_models` (pad/ctx/money — DRY)
+- [x] [P06-T02] `providers)` subcommand: required slug, `--sort` validation, `--json`;
+      `usage()` + README "Choosing a provider to pin"
+- [x] [P06-TS01] `tests/smoke.sh`: default alpha, ctx/price/uptime rendering, no dead
+      speed column, pin hint, each sort's ordering, `--json`, missing-slug / bad-sort / 404
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + smoke) pass.
+
+### Manual Verification
+- `bin/claude-openrouter providers z-ai/glm-5.2` → 28 providers, alphabetical, no key needed.
+- `--sort cheapest` → `deepinfra/fp4 $0.93`; `--sort expensive` → `wafer/fast $3.00`;
+  `--sort reliable` → `wafer/fast 100% up` (orders diverge from row 3).
+- `providers` with no slug / `--sort fastest` / an unknown slug → clear errors, non-zero.
