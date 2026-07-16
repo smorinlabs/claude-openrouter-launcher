@@ -644,6 +644,129 @@ else
   bad "preflight treats 5xx as transient" "rc=$chk4_rc $chk4_out"
 fi
 
+# 28. 'models' — discovery over the public /models endpoint (no key needed).
+#     Stub curl with a fixed catalog: a 1M-context paid model, a free model, a small one.
+modbin="$tmpstate/modbin"; mkdir -p "$modbin"
+cat > "$modbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */v1/models)
+    cat <<'JSON'
+{"data":[
+ {"id":"z-ai/glm-5.2","name":"Z.ai: GLM 5.2","context_length":1048576,"pricing":{"prompt":"0.00000095","completion":"0.000003"}},
+ {"id":"vendor/gratis","name":"Vendor: Free Model","context_length":131072,"pricing":{"prompt":"0","completion":"0"}},
+ {"id":"acme/tiny","name":"Acme: Tiny","context_length":8000,"pricing":{"prompt":"0.0000006","completion":"0.0000022"}}
+]}
+JSON
+    ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$modbin/curl"
+run_models() { env -u OPENROUTER_API_KEY PATH="$modbin:$PATH" bin/claude-openrouter models "$@" 2>&1; }
+
+# match on id, formatting ($/1M + M-context), and both hint lines — with NO key set
+m_out="$(run_models glm)"
+# shellcheck disable=SC2016  # $0.95/$3.00 is a literal price string, not an expansion
+if [[ "$m_out" == *"z-ai/glm-5.2"* && "$m_out" == *"1.0M ctx"* && "$m_out" == *'$0.95/$3.00 per 1M'* \
+   && "$m_out" == *"1 of 3 matching"* && "$m_out" == *"--backend"* && "$m_out" == *"see 'claude-openrouter modes'"* \
+   && "$m_out" != *"vendor/gratis"* ]]; then
+  ok "models: filter by id + format + hints"
+else
+  bad "models: filter by id + format + hints" "$m_out"
+fi
+
+# match on NAME, case-insensitively; a fully-free model reads 'free' (not 'free/free per 1M')
+m_free="$(run_models FREE)"
+if [[ "$m_free" == *"vendor/gratis"* && "$m_free" == *"131K ctx  free"* \
+   && "$m_free" != *"free/free"* && "$m_free" != *"z-ai/glm-5.2"* ]]; then
+  ok "models: name match (case-insensitive) + free pricing"
+else
+  bad "models: name match (case-insensitive) + free pricing" "$m_free"
+fi
+
+# 28c. A 200 carrying a non-JSON body must fail cleanly (col_die), never as a raw jq
+#      parse error — same guarantee setup.sh already makes for preset responses.
+junkbin="$tmpstate/junkbin"; mkdir -p "$junkbin"
+cat > "$junkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf '<html>502 bad gateway</html>'
+EOS
+chmod +x "$junkbin/curl"
+j_out="$(env -u OPENROUTER_API_KEY PATH="$junkbin:$PATH" bin/claude-openrouter models glm 2>&1)"
+j_rc=$?
+jp_out="$(PATH="$junkbin:$PATH" bin/claude-openrouter presets --key test 2>&1)"
+jp_rc=$?
+if [ "$j_rc" -ne 0 ] && [[ "$j_out" == *"unreadable /models response"* && "$j_out" != *"parse error"* ]] \
+  && [ "$jp_rc" -ne 0 ] && [[ "$jp_out" == *"unreadable /presets response"* && "$jp_out" != *"parse error"* ]]; then
+  ok "models/presets: non-JSON 200 fails cleanly"
+else
+  bad "models/presets: non-JSON 200 fails cleanly" "models(rc=$j_rc)=$j_out presets(rc=$jp_rc)=$jp_out"
+fi
+
+# no query lists all; K-context formatting present
+m_all="$(run_models)"
+if [[ "$m_all" == *"3 total"* && "$m_all" == *"z-ai/glm-5.2"* && "$m_all" == *"vendor/gratis"* \
+   && "$m_all" == *"acme/tiny"* && "$m_all" == *"131K ctx"* ]]; then
+  ok "models: no query lists all"
+else
+  bad "models: no query lists all" "$m_all"
+fi
+
+# --json emits exactly the filtered set
+m_json="$(env -u OPENROUTER_API_KEY PATH="$modbin:$PATH" bin/claude-openrouter models glm --json 2>/dev/null)"
+if [ "$(printf '%s' "$m_json" | jq -r 'length')" = "1" ] \
+  && [ "$(printf '%s' "$m_json" | jq -r '.[0].id')" = "z-ai/glm-5.2" ]; then
+  ok "models: --json filtered array"
+else
+  bad "models: --json filtered array" "$m_json"
+fi
+
+# 28b. no match is grep-style: stderr message + exit 1 (and [] + exit 1 for --json)
+nm_err="$(env -u OPENROUTER_API_KEY PATH="$modbin:$PATH" bin/claude-openrouter models zzz 2>&1 >/dev/null)"
+nm_rc=$?
+nmj="$(env -u OPENROUTER_API_KEY PATH="$modbin:$PATH" bin/claude-openrouter models zzz --json 2>/dev/null)"
+nmj_rc=$?
+if [ "$nm_rc" -eq 1 ] && [[ "$nm_err" == *"no models match 'zzz'"* ]] \
+  && [ "$nmj_rc" -eq 1 ] && [ "$(printf '%s' "$nmj" | tr -d '[:space:]')" = "[]" ]; then
+  ok "models: no match -> stderr + exit 1"
+else
+  bad "models: no match -> stderr + exit 1" "rc=$nm_rc jsonrc=$nmj_rc err=$nm_err json=$nmj"
+fi
+
+# 29. 'presets' — account listing cross-referenced against config profiles:
+#     linked / orphan (on account, unreferenced) / missing (referenced, absent upstream).
+prebin="$tmpstate/presets-bin"; mkdir -p "$prebin"
+cat > "$prebin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */v1/presets) printf '{"data":[{"slug":"cc-fusion"},{"slug":"cc-orphan"}]}' ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$prebin/curl"
+p_out="$(PATH="$prebin:$PATH" bin/claude-openrouter presets --key test 2>&1)"
+if [[ "$p_out" == *"2 total"* \
+   && "$p_out" == *"cc-fusion"*"← profile: fusion"* \
+   && "$p_out" == *"cc-orphan"*"orphan"* \
+   && "$p_out" == *"cc-glm-fireworks"*"missing"*"glm-fireworks"* ]]; then
+  ok "presets: linked / orphan / missing"
+else
+  bad "presets: linked / orphan / missing" "$p_out"
+fi
+
+p_json="$(PATH="$prebin:$PATH" bin/claude-openrouter presets --key test --json 2>/dev/null)"
+if [ "$(printf '%s' "$p_json" | jq -r 'length')" = "2" ] \
+  && [ "$(printf '%s' "$p_json" | jq -r '.[0].slug')" = "cc-fusion" ]; then
+  ok "presets: --json account array"
+else
+  bad "presets: --json account array" "$p_json"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"
 exit "$fail"

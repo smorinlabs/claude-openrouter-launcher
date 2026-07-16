@@ -121,6 +121,37 @@ claude-openrouter profiles                               # list profiles and the
 
 **Routing variants & provider pinning.** A `model`-type slug can carry an OpenRouter routing variant — `:nitro` (fastest), `:floor` (cheapest), `:exacto` (quality-first provider) — but a slug *cannot* pin one named provider. To force a single provider (e.g. Fireworks) use a `preset` profile: it bakes `provider: { "only": ["fireworks"] }` into a server-side preset (created by `./setup.sh`) and resolves to `@preset/<slug>`. Before setup runs it falls back to the bare `model` (unpinned).
 
+### Discovering models
+
+Need a slug for a `model` profile or `--backend`? `models` searches OpenRouter's catalog (342 models). It hits a **public** endpoint, so it needs no key and works before `./setup.sh`:
+
+```bash
+claude-openrouter models glm            # search id + name (case-insensitive)
+claude-openrouter models                # list everything (pipe to grep/less/fzf)
+claude-openrouter models glm --json     # raw model objects for scripting
+```
+```
+Models (OpenRouter — 12 of 342 matching "glm"):
+  z-ai/glm-4.6   Z.ai: GLM 4.6   203K ctx  $0.50/$2.00 per 1M
+  z-ai/glm-5.2   Z.ai: GLM 5.2   1.0M ctx  $0.95/$3.00 per 1M
+```
+Results are sorted by slug so families group together, pricing is shown per 1M tokens in/out (free models say `free`), and a search with no matches exits `1` (grep-style). Copy a slug straight into a profile's `"model"` or `--backend`.
+
+### Listing your account's presets
+
+`presets` lists the OpenRouter presets on your **account** and cross-references them against your config — surfacing what `profiles` (config-side) and `doctor` (only checks *referenced* presets) can't:
+
+```bash
+claude-openrouter presets --key-file ~/.config/openrouter.env
+```
+```
+Presets (OpenRouter account — 3 total):
+  cc-fusion         ← profile: fusion
+  cc-glm-fireworks  ← profile: glm-fireworks
+  cc-fusion-probe   ⚠ orphan — no profile references it
+```
+**orphan** = on your account but no profile points at it (harmless leftovers, e.g. after a slug rename). **missing** = a profile references it but it isn't on the account → run `./setup.sh --profile <name>`.
+
 > **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
 >
 > **Upgrading to v0.4.0 (rename):** the project was renamed to **Claude OpenRouter Launcher** (clean break, no aliases). The binary is now **`claude-openrouter`** (was `claude-fusion`), the config env var is **`CLAUDE_OPENROUTER_CONFIG`** (was `CLAUDE_FUSION_CONFIG`), and state lives in **`~/.config/claude-openrouter`** (was `~/.config/claude-fusion`). Re-run `./setup.sh` once so preset markers land in the new state dir; your OpenRouter presets (`cc-fusion`, etc.) are unchanged. If you symlinked the old binary, re-run `make install` / `just install`.
@@ -150,6 +181,8 @@ claude-openrouter --backend "vendor/model" [args…]  # use a raw OpenRouter slu
 claude-openrouter --mode MODE [args…]             # launch a mode; extra args pass through to claude (e.g. -p "…")
 claude-openrouter modes                           # list modes and their per-slot models
 claude-openrouter profiles                        # list profiles and their targets
+claude-openrouter models [QUERY] [--json]         # find a model slug (public API — no key needed)
+claude-openrouter presets [--json]                # list your account's presets; flags orphans
 claude-openrouter doctor                          # health check: deps, key, credits, preset, env conflicts
 claude-openrouter --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
 claude-openrouter --cost --mode … -p …            # run, then report what that session cost on OpenRouter

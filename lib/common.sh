@@ -234,6 +234,105 @@ col_list_modes() {
   echo "  ('backend' resolves to the active profile's target — see 'claude-openrouter profiles')"
 }
 
+# col_list_models <query> <json> — list OpenRouter models to find a slug for a
+# "model" profile or --backend. <query> is an optional case-insensitive substring
+# matched against both id and name; empty lists all. <json>=1 emits the filtered
+# raw model objects instead of the table. The /models endpoint is public, so this
+# needs no key and works before ./setup.sh.
+# Returns 1 (grep-style) when the query matches nothing, 0 otherwise.
+col_list_models() {
+  local query="${1:-}" json="${2:-0}" resp q total filtered n
+  resp="$(curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/models" 2>/dev/null)" \
+    || col_die "couldn't reach OpenRouter to list models — check your network, or run 'claude-openrouter doctor'"
+  # A 200 carrying a non-JSON body (proxy/error page) or an unexpected shape must fail
+  # cleanly here — otherwise jq aborts the run with a raw parse error under `set -e`.
+  printf '%s' "$resp" | jq -e '.data | type == "array"' >/dev/null 2>&1 \
+    || col_die "OpenRouter returned an unreadable /models response — try again, or run 'claude-openrouter doctor'"
+  q="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
+  total="$(printf '%s' "$resp" | jq -r '.data | length')"
+  # shellcheck disable=SC2016  # $q is a jq variable, not a bash expansion
+  filtered="$(printf '%s' "$resp" | jq -c --arg q "$q" '
+    [ .data[] | select($q == "" or (.id | ascii_downcase | contains($q))
+                                or ((.name // "") | ascii_downcase | contains($q))) ]
+    | sort_by(.id)')"
+  n="$(printf '%s' "$filtered" | jq -r 'length')"
+  if [ "$n" -eq 0 ]; then
+    if [ "$json" = "1" ]; then printf '[]\n'; else col_warn "no models match '$query'"; fi
+    return 1
+  fi
+  if [ "$json" = "1" ]; then printf '%s' "$filtered" | jq .; return 0; fi
+
+  if [ -n "$query" ]; then
+    printf 'Models (OpenRouter — %s of %s matching "%s"):\n' "$n" "$total" "$query"
+  else
+    printf 'Models (OpenRouter — %s total):\n' "$total"
+  fi
+  printf '%s' "$filtered" | jq -r '
+    def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
+    def ctx: if . >= 1000000 then ((. * 10 / 1000000) | round) as $t | "\(($t / 10) | floor).\($t % 10)M"
+             elif . >= 1000 then "\((. / 1000) | round)K"
+             else "\(.)" end;
+    def money: (. | tonumber) as $v
+      | if $v == 0 then "free"
+        else (($v * 1000000 * 100) | round) as $c
+          | "$" + (($c / 100) | floor | tostring) + "."
+                + (($c % 100) | tostring | if length == 1 then "0" + . else . end)
+        end;
+    map({ id: .id,
+          nm: (.name // .id),
+          c:  ((.context_length // 0) | ctx),
+          # A model that is free both ways reads as a plain "free" — not "free/free per 1M".
+          p:  ( ((.pricing.prompt // "0") | tonumber) as $pi
+              | ((.pricing.completion // "0") | tonumber) as $po
+              | if $pi == 0 and $po == 0 then "free"
+                else ((.pricing.prompt // "0") | money) + "/" + ((.pricing.completion // "0") | money) + " per 1M"
+                end ) }) as $rows
+    | ($rows | map(.id | length) | max) as $iw
+    | ($rows | map(.nm | length) | max) as $nw
+    | ($rows | map(.c  | length) | max) as $cw
+    | $rows[]
+    | "  \(.id | pad($iw))  \(.nm | pad($nw))  \(.c | pad($cw)) ctx  \(.p)"'
+  echo "  (use a slug as a profile's \"model\", or with --backend)"
+  echo "  (looking for launch modes? see 'claude-openrouter modes')"
+  return 0
+}
+
+# col_list_presets <key> <json> — list the OpenRouter presets on the account and
+# cross-reference them against the config's preset-backed profiles. Surfaces what
+# neither 'profiles' (config-side) nor doctor (only checks referenced presets) can:
+# orphans (on the account, unreferenced) and missing (referenced, absent upstream).
+# <json>=1 emits the raw account presets array. Needs a key.
+col_list_presets() {
+  local key="$1" json="${2:-0}" resp arr cfg
+  resp="$(col_or_get "$key" "presets" 2>/dev/null)" \
+    || col_die "couldn't list presets — check your key/network, or run 'claude-openrouter doctor'"
+  # As above: a non-JSON / unexpected-shape 200 must not surface as a jq parse error.
+  printf '%s' "$resp" | jq -e '(.data // .) | type == "array"' >/dev/null 2>&1 \
+    || col_die "OpenRouter returned an unreadable /presets response — try again, or run 'claude-openrouter doctor'"
+  arr="$(printf '%s' "$resp" | jq -c '(.data // .)')"
+  if [ "$json" = "1" ]; then printf '%s' "$arr" | jq .; return 0; fi
+
+  cfg="$(jq -c '[.profiles | to_entries[]
+    | select(.value.type == "fusion" or .value.type == "preset")
+    | {slug: (.value.preset_slug // ""), profile: .key}]
+    | map(select(.slug != ""))' "$COL_CONFIG")"
+  printf 'Presets (OpenRouter account — %s total):\n' "$(printf '%s' "$arr" | jq -r 'length')"
+  jq -rn --argjson acct "$arr" --argjson cfg "$cfg" '
+    def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
+    ($acct | map(.slug)) as $aslugs
+    | ((($acct | map(.slug | length)) + ($cfg | map(.slug | length))) | max // 0) as $w
+    | ( $acct[]
+        | .slug as $s
+        | ([$cfg[] | select(.slug == $s) | .profile] | first) as $p
+        | if $p != null then "  \($s | pad($w))  ← profile: \($p)"
+          else "  \($s | pad($w))  ⚠ orphan — no profile references it" end )
+    , ( $cfg[]
+        | select(.slug as $s | ($aslugs | index($s)) == null)
+        | "  \(.slug | pad($w))  ✗ missing — profile: \(.profile) — run ./setup.sh --profile \(.profile)" )'
+  echo "  (orphans are harmless; delete them at https://openrouter.ai/settings/presets)"
+  return 0
+}
+
 # col_doctor <key> — health checks with ✓/✗/⚠ and fix hints. Returns non-zero on ✗.
 col_doctor() {
   local key="$1" src="${2:-}" rc=0

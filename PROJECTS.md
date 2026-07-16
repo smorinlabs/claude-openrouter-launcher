@@ -122,3 +122,54 @@ Full, clean-break rename (no aliases). Breaking change.
 ### Manual Verification
 - `bin/claude-openrouter -g` launches; `profiles`/`modes`/`doctor` work.
 - After upgrade, first launch warns "run ./setup.sh" (new state dir); re-running setup restores readiness.
+
+---
+
+## [x] Project P05: models discovery command (v0.5.0)
+**Goal/Requirement**: Add a `models` subcommand so you can find an OpenRouter **model
+slug** for a `model` profile or `--backend` without leaving the tool. Discovery-first:
+the slug is the product. Public endpoint — no key, works before `./setup.sh`.
+See `docs/superpowers/specs/2026-07-15-models-discovery-command-design.md`.
+
+**Out of Scope**
+- Per-model provider/endpoint listing → P06.
+- Caching, pagination, `--free`/`--provider` filters, fuzzy matching, sort flags.
+
+### Tests & Tasks
+- [x] [P05-T01] `col_list_models <query> <json>` in `lib/common.sh`: keyless fetch, case-insensitive substring on id+name, sort by id, aligned table, `$/1M` + `K`/`M` formatting, `free`
+- [x] [P05-T02] `models)` subcommand in `bin/claude-openrouter` (optional QUERY, `--json`); `usage()` + README "Discovering models"
+- [x] [P05-TS01] `tests/smoke.sh`: id/name match, case-insensitivity, no-query lists all, `--json` filtered array, free + K/M formatting, hints, works with no key
+- [x] [P05-TS02] No match is grep-style: stderr message + exit 1; `--json` → `[]` + exit 1
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + smoke) pass.
+
+### Manual Verification
+- `bin/claude-openrouter models glm` → GLM family, slug-first, sorted, aligned.
+- `bin/claude-openrouter models zzz; echo $?` → stderr message, `1`.
+- `bin/claude-openrouter models glm --json | jq -r '.[].id'` → the GLM slugs.
+- Works with `OPENROUTER_API_KEY` unset.
+
+---
+
+## [x] Project P07: account presets command (v0.5.0)
+**Goal/Requirement**: Add a `presets` subcommand listing the OpenRouter presets on your
+**account** (`GET /api/v1/presets`), cross-referenced against config profiles — surfacing
+**orphans** (on the account, unreferenced) and **missing** (referenced, absent upstream).
+Neither `profiles` (config-side) nor `doctor` (only checks referenced presets) can see these.
+
+**Out of Scope**
+- Deleting/creating presets (setup.sh creates; deletion stays on the OpenRouter dashboard).
+- Listing config-side presets — `profiles` already does that.
+
+### Tests & Tasks
+- [x] [P07-T01] `col_list_presets <key> <json>` in `lib/common.sh`: account fetch, config cross-reference, linked/orphan/missing states
+- [x] [P07-T02] `presets)` subcommand (`--key`/`--key-file`/`--json`); `usage()` + README section
+- [x] [P07-TS01] `tests/smoke.sh`: stubbed account list → linked / orphan / missing lines; `--json` array
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + smoke) pass.
+
+### Manual Verification
+- `bin/claude-openrouter presets --key-file ~/.config/smorin/.env` → links `cc-fusion`→`fusion`,
+  `cc-glm-fireworks`→`glm-fireworks`, and flags the `cc-fusion-probe` orphan.
