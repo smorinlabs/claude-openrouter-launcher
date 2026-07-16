@@ -244,6 +244,10 @@ col_list_models() {
   local query="${1:-}" json="${2:-0}" resp q total filtered n
   resp="$(curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/models" 2>/dev/null)" \
     || col_die "couldn't reach OpenRouter to list models — check your network, or run 'claude-openrouter doctor'"
+  # A 200 carrying a non-JSON body (proxy/error page) or an unexpected shape must fail
+  # cleanly here — otherwise jq aborts the run with a raw parse error under `set -e`.
+  printf '%s' "$resp" | jq -e '.data | type == "array"' >/dev/null 2>&1 \
+    || col_die "OpenRouter returned an unreadable /models response — try again, or run 'claude-openrouter doctor'"
   q="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
   total="$(printf '%s' "$resp" | jq -r '.data | length')"
   # shellcheck disable=SC2016  # $q is a jq variable, not a bash expansion
@@ -277,12 +281,17 @@ col_list_models() {
     map({ id: .id,
           nm: (.name // .id),
           c:  ((.context_length // 0) | ctx),
-          p:  (((.pricing.prompt // "0") | money) + "/" + ((.pricing.completion // "0") | money)) }) as $rows
+          # A model that is free both ways reads as a plain "free" — not "free/free per 1M".
+          p:  ( ((.pricing.prompt // "0") | tonumber) as $pi
+              | ((.pricing.completion // "0") | tonumber) as $po
+              | if $pi == 0 and $po == 0 then "free"
+                else ((.pricing.prompt // "0") | money) + "/" + ((.pricing.completion // "0") | money) + " per 1M"
+                end ) }) as $rows
     | ($rows | map(.id | length) | max) as $iw
     | ($rows | map(.nm | length) | max) as $nw
     | ($rows | map(.c  | length) | max) as $cw
     | $rows[]
-    | "  \(.id | pad($iw))  \(.nm | pad($nw))  \(.c | pad($cw)) ctx  \(.p) per 1M"'
+    | "  \(.id | pad($iw))  \(.nm | pad($nw))  \(.c | pad($cw)) ctx  \(.p)"'
   echo "  (use a slug as a profile's \"model\", or with --backend)"
   echo "  (looking for launch modes? see 'claude-openrouter modes')"
   return 0
@@ -297,6 +306,9 @@ col_list_presets() {
   local key="$1" json="${2:-0}" resp arr cfg
   resp="$(col_or_get "$key" "presets" 2>/dev/null)" \
     || col_die "couldn't list presets — check your key/network, or run 'claude-openrouter doctor'"
+  # As above: a non-JSON / unexpected-shape 200 must not surface as a jq parse error.
+  printf '%s' "$resp" | jq -e '(.data // .) | type == "array"' >/dev/null 2>&1 \
+    || col_die "OpenRouter returned an unreadable /presets response — try again, or run 'claude-openrouter doctor'"
   arr="$(printf '%s' "$resp" | jq -c '(.data // .)')"
   if [ "$json" = "1" ]; then printf '%s' "$arr" | jq .; return 0; fi
 

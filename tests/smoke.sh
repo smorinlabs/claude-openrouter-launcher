@@ -678,12 +678,32 @@ else
   bad "models: filter by id + format + hints" "$m_out"
 fi
 
-# match on NAME, case-insensitively, and render a free model as 'free'
+# match on NAME, case-insensitively; a fully-free model reads 'free' (not 'free/free per 1M')
 m_free="$(run_models FREE)"
-if [[ "$m_free" == *"vendor/gratis"* && "$m_free" == *"free/free"* && "$m_free" != *"z-ai/glm-5.2"* ]]; then
+if [[ "$m_free" == *"vendor/gratis"* && "$m_free" == *"131K ctx  free"* \
+   && "$m_free" != *"free/free"* && "$m_free" != *"z-ai/glm-5.2"* ]]; then
   ok "models: name match (case-insensitive) + free pricing"
 else
   bad "models: name match (case-insensitive) + free pricing" "$m_free"
+fi
+
+# 28c. A 200 carrying a non-JSON body must fail cleanly (col_die), never as a raw jq
+#      parse error — same guarantee setup.sh already makes for preset responses.
+junkbin="$tmpstate/junkbin"; mkdir -p "$junkbin"
+cat > "$junkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf '<html>502 bad gateway</html>'
+EOS
+chmod +x "$junkbin/curl"
+j_out="$(env -u OPENROUTER_API_KEY PATH="$junkbin:$PATH" bin/claude-openrouter models glm 2>&1)"
+j_rc=$?
+jp_out="$(PATH="$junkbin:$PATH" bin/claude-openrouter presets --key test 2>&1)"
+jp_rc=$?
+if [ "$j_rc" -ne 0 ] && [[ "$j_out" == *"unreadable /models response"* && "$j_out" != *"parse error"* ]] \
+  && [ "$jp_rc" -ne 0 ] && [[ "$jp_out" == *"unreadable /presets response"* && "$jp_out" != *"parse error"* ]]; then
+  ok "models/presets: non-JSON 200 fails cleanly"
+else
+  bad "models/presets: non-JSON 200 fails cleanly" "models(rc=$j_rc)=$j_out presets(rc=$jp_rc)=$jp_out"
 fi
 
 # no query lists all; K-context formatting present
