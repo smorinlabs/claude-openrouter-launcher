@@ -30,6 +30,8 @@ Quick start:
   claude-openrouter --mode MODE [args…]      pick where the backend goes (see 'modes')
   claude-openrouter profiles                 list profiles
   claude-openrouter modes                    list modes
+  claude-openrouter models [QUERY] [--json]  find a model slug (no key needed)
+  claude-openrouter presets [--json]         list your account's OpenRouter presets
   claude-openrouter doctor                   health checks (deps, key, credits, presets)
 
 Options:
@@ -90,6 +92,40 @@ case "${1:-}" in
     col_load_config
     col_list_profiles
     exit 0
+    ;;
+  models)
+    shift
+    m_query="" m_json=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --json) m_json=1; shift;;
+        -h|--help) usage; exit 0;;
+        *) m_query="$1"; shift;;
+      esac
+    done
+    # No config or key needed — /models is public.
+    col_require curl jq
+    m_rc=0
+    col_list_models "$m_query" "$m_json" || m_rc=$?
+    exit "$m_rc"
+    ;;
+  presets)
+    shift
+    p_key="" p_keyfile="" p_json=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --key) p_key="${2:?}"; shift 2;; --key=*) p_key="${1#*=}"; shift;;
+        --key-file) p_keyfile="${2:?}"; shift 2;; --key-file=*) p_keyfile="${1#*=}"; shift;;
+        --json) p_json=1; shift;;
+        -h|--help) usage; exit 0;;
+        *) shift;;
+      esac
+    done
+    col_require curl jq
+    col_load_config
+    p_rc=0
+    col_list_presets "$(col_resolve_key "$p_key" "$p_keyfile")" "$p_json" || p_rc=$?
+    exit "$p_rc"
     ;;
 esac
 
