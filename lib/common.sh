@@ -234,6 +234,24 @@ col_list_modes() {
   echo "  ('backend' resolves to the active profile's target — see 'claude-openrouter profiles')"
 }
 
+# Shared jq formatting helpers for the listing commands, prepended to their programs:
+#   pad($n)  right-pad a string to a column width
+#   ctx      1048576 -> "1.0M", 131072 -> "131K"
+#   money    per-token price string -> "$0.95" per 1M, or "free" at zero
+# shellcheck disable=SC2016,SC2034  # jq vars, not shell; consumed by col_list_models / col_list_providers below
+COL_JQ_FMT='
+    def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
+    def ctx: if . >= 1000000 then ((. * 10 / 1000000) | round) as $t | "\(($t / 10) | floor).\($t % 10)M"
+             elif . >= 1000 then "\((. / 1000) | round)K"
+             else "\(.)" end;
+    def money: (. | tonumber) as $v
+      | if $v == 0 then "free"
+        else (($v * 1000000 * 100) | round) as $c
+          | "$" + (($c / 100) | floor | tostring) + "."
+                + (($c % 100) | tostring | if length == 1 then "0" + . else . end)
+        end;
+'
+
 # col_list_models <query> <json> — list OpenRouter models to find a slug for a
 # "model" profile or --backend. <query> is an optional case-insensitive substring
 # matched against both id and name; empty lists all. <json>=1 emits the filtered
@@ -267,17 +285,7 @@ col_list_models() {
   else
     printf 'Models (OpenRouter — %s total):\n' "$total"
   fi
-  printf '%s' "$filtered" | jq -r '
-    def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
-    def ctx: if . >= 1000000 then ((. * 10 / 1000000) | round) as $t | "\(($t / 10) | floor).\($t % 10)M"
-             elif . >= 1000 then "\((. / 1000) | round)K"
-             else "\(.)" end;
-    def money: (. | tonumber) as $v
-      | if $v == 0 then "free"
-        else (($v * 1000000 * 100) | round) as $c
-          | "$" + (($c / 100) | floor | tostring) + "."
-                + (($c % 100) | tostring | if length == 1 then "0" + . else . end)
-        end;
+  printf '%s' "$filtered" | jq -r "$COL_JQ_FMT"'
     map({ id: .id,
           nm: (.name // .id),
           c:  ((.context_length // 0) | ctx),
@@ -294,6 +302,49 @@ col_list_models() {
     | "  \(.id | pad($iw))  \(.nm | pad($nw))  \(.c | pad($cw)) ctx  \(.p)"'
   echo "  (use a slug as a profile's \"model\", or with --backend)"
   echo "  (looking for launch modes? see 'claude-openrouter modes')"
+  return 0
+}
+
+# col_list_providers <slug> <sort> <json> — list the providers serving a model.
+# The `tag` column is the provider slug you put in a preset profile's provider.only;
+# the rest exposes the per-provider spread the model summary hides (same slug can be
+# served at 10x different context and 3x different price). <sort>: alpha (default) |
+# cheapest | expensive | reliable. Public endpoint — no key needed.
+# Note: OpenRouter returns throughput_last_30m / latency_last_30m as null on this
+# endpoint (verified across several models), so no speed column is shown — uptime is
+# the perf signal that is actually populated.
+col_list_providers() {
+  local slug="$1" sort="${2:-alpha}" json="${3:-0}" resp eps n
+  resp="$(curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/models/$slug/endpoints" 2>/dev/null)" \
+    || col_die "no providers found for '$slug' — check the slug with: claude-openrouter models ${slug##*/}"
+  printf '%s' "$resp" | jq -e '.data.endpoints | type == "array"' >/dev/null 2>&1 \
+    || col_die "OpenRouter returned an unreadable /endpoints response — try again, or run 'claude-openrouter doctor'"
+  eps="$(printf '%s' "$resp" | jq -c '.data.endpoints')"
+  n="$(printf '%s' "$eps" | jq -r 'length')"
+  if [ "$n" -eq 0 ]; then col_warn "no providers currently serve '$slug'"; return 1; fi
+  if [ "$json" = "1" ]; then printf '%s' "$eps" | jq .; return 0; fi
+
+  printf 'Providers for %s (%s serving):\n' "$slug" "$n"
+  # shellcheck disable=SC2016  # $sort is a jq variable, not a bash expansion
+  printf '%s' "$eps" | jq -r --arg sort "$sort" "$COL_JQ_FMT"'
+    ( if   $sort == "cheapest"  then sort_by((.pricing.prompt // "0") | tonumber)
+      elif $sort == "expensive" then sort_by(-((.pricing.prompt // "0") | tonumber))
+      elif $sort == "reliable"  then sort_by(-(.uptime_last_30m // 0))
+      else sort_by(.tag) end )
+    | map({ t: .tag,
+            c: ((.context_length // 0) | ctx),
+            p: ( ((.pricing.prompt // "0") | tonumber) as $pi
+               | ((.pricing.completion // "0") | tonumber) as $po
+               | if $pi == 0 and $po == 0 then "free"
+                 else ((.pricing.prompt // "0") | money) + "/" + ((.pricing.completion // "0") | money) + " per 1M"
+                 end ),
+            u: (if .uptime_last_30m then "\((.uptime_last_30m * 10 | round) / 10)% up" else "—" end) }) as $rows
+    | ($rows | map(.t | length) | max) as $tw
+    | ($rows | map(.c | length) | max) as $cw
+    | ($rows | map(.p | length) | max) as $pw
+    | $rows[]
+    | "  \(.t | pad($tw))  \(.c | pad($cw)) ctx  \(.p | pad($pw))  \(.u)"'
+  echo "  (pin one with a preset profile: \"provider\": { \"only\": [\"<tag>\"] } — see README)"
   return 0
 }
 

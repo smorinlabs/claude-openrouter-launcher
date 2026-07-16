@@ -31,6 +31,8 @@ Quick start:
   claude-openrouter profiles                 list profiles
   claude-openrouter modes                    list modes
   claude-openrouter models [QUERY] [--json]  find a model slug (no key needed)
+  claude-openrouter providers SLUG [--sort alpha|cheapest|expensive|reliable] [--json]
+                                             who serves a model, and at what ctx/price/speed
   claude-openrouter presets [--json]         list your account's OpenRouter presets
   claude-openrouter doctor                   health checks (deps, key, credits, presets)
 
@@ -108,6 +110,28 @@ case "${1:-}" in
     m_rc=0
     col_list_models "$m_query" "$m_json" || m_rc=$?
     exit "$m_rc"
+    ;;
+  providers)
+    shift
+    v_slug="" v_sort="alpha" v_json=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --sort) v_sort="${2:?--sort needs a value}"; shift 2;; --sort=*) v_sort="${1#*=}"; shift;;
+        --json) v_json=1; shift;;
+        -h|--help) usage; exit 0;;
+        *) v_slug="$1"; shift;;
+      esac
+    done
+    [ -n "$v_slug" ] || col_die "providers needs a model slug — e.g. claude-openrouter providers z-ai/glm-5.2  (find one with 'claude-openrouter models')"
+    case "$v_sort" in
+      alpha|cheapest|expensive|reliable) ;;
+      *) col_die "unknown --sort '$v_sort' — use: alpha (default), cheapest, expensive, reliable";;
+    esac
+    # No config or key needed — /models/<slug>/endpoints is public.
+    col_require curl jq
+    v_rc=0
+    col_list_providers "$v_slug" "$v_sort" "$v_json" || v_rc=$?
+    exit "$v_rc"
     ;;
   presets)
     shift

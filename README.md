@@ -137,6 +137,26 @@ Models (OpenRouter — 12 of 342 matching "glm"):
 ```
 Results are sorted by slug so families group together, pricing is shown per 1M tokens in/out (free models say `free`), and a search with no matches exits `1` (grep-style). Copy a slug straight into a profile's `"model"` or `--backend`.
 
+### Choosing a provider to pin
+
+A slug like `z-ai/glm-5.2` is served by **many** providers, and they are not equivalent — `providers` shows the spread the model summary hides, and gives you the `tag` you put in a `preset` profile's `provider.only`:
+
+```bash
+claude-openrouter providers z-ai/glm-5.2                     # alphabetical (default)
+claude-openrouter providers z-ai/glm-5.2 --sort cheapest     # also: expensive, reliable, alpha
+claude-openrouter providers z-ai/glm-5.2 --json
+```
+```
+Providers for z-ai/glm-5.2 (28 serving):
+  deepinfra/fp4    1.0M ctx  $0.93/$3.00 per 1M   98.9% up
+  akashml/fp8      131K ctx  $1.30/$4.40 per 1M   93.1% up
+  fireworks/fast   1.0M ctx  $2.10/$6.60 per 1M   99.9% up
+  (pin one with a preset profile: "provider": { "only": ["<tag>"] } — see README)
+```
+**Why this matters:** the same slug can be served at **10× different context** (101K vs 1.0M above) and **3× different price** — so default routing or the wrong pin can silently hand you a fraction of the context you expected. Sort by `cheapest` to see what default routing leans toward, or `reliable` (uptime) to pick a provider worth pinning.
+
+> OpenRouter returns `throughput`/`latency` as `null` on this endpoint, so there's no speed column — `uptime` is the perf signal that's actually populated. (Use `:nitro` on a model slug if you want throughput-sorted routing.)
+
 ### Listing your account's presets
 
 `presets` lists the OpenRouter presets on your **account** and cross-references them against your config — surfacing what `profiles` (config-side) and `doctor` (only checks *referenced* presets) can't:
@@ -182,6 +202,7 @@ claude-openrouter --mode MODE [args…]             # launch a mode; extra args 
 claude-openrouter modes                           # list modes and their per-slot models
 claude-openrouter profiles                        # list profiles and their targets
 claude-openrouter models [QUERY] [--json]         # find a model slug (public API — no key needed)
+claude-openrouter providers SLUG [--sort …]       # who serves a model, at what ctx/price/uptime
 claude-openrouter presets [--json]                # list your account's presets; flags orphans
 claude-openrouter doctor                          # health check: deps, key, credits, preset, env conflicts
 claude-openrouter --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
