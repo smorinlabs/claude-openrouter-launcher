@@ -199,8 +199,8 @@ claude-openrouter -g                              # launch the default mode (no 
 claude-openrouter --profile NAME [args…]          # use a named profile (fusion preset or model alias)
 claude-openrouter --backend "vendor/model" [args…]  # use a raw OpenRouter slug directly
 claude-openrouter --mode MODE [args…]             # launch a mode; extra args pass through to claude (e.g. -p "…")
-claude-openrouter modes                           # list modes and their per-slot models
-claude-openrouter profiles                        # list profiles and their targets
+claude-openrouter modes [--json]                  # list modes and their per-slot models
+claude-openrouter profiles [--json]               # list profiles and their targets
 claude-openrouter models [QUERY] [--json]         # find a model slug (public API — no key needed)
 claude-openrouter providers SLUG [--sort …]       # who serves a model, at what ctx/price/uptime
 claude-openrouter presets [--json]                # list your account's presets; flags orphans
@@ -210,7 +210,29 @@ claude-openrouter --cost --mode … -p …            # run, then report what th
 claude-openrouter --help                          # usage
 ```
 
-Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (shellcheck) · `test` (no-cost smoke tests) · `setup` · `install` (symlink onto PATH; `PREFIX` overridable) · `hooks` (enable the gitleaks pre-commit hook). `just all` runs lint + tests.
+Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (shellcheck) · `test` (no-cost smoke tests) · `setup` · `install` (symlink onto PATH and fpath; `PREFIX` / `COMPLETION_PREFIX` overridable) · `hooks` (enable the gitleaks pre-commit hook). `just all` runs lint + tests.
+
+### Shell completion
+
+`make install` places a zsh completion at `~/.zfunc/_claude-openrouter` alongside the launcher symlink. Add that directory to your `fpath` **before** `compinit` runs:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
+```
+
+Then subcommands, flags, and — the useful part — your own config values complete:
+
+```
+$ claude-openrouter --profile <TAB>
+deepseek  fusion  glm  glm-exacto  glm-fireworks  glm-nitro  qwen
+$ claude-openrouter --mode <TAB>
+extreme  main  subagent
+```
+
+Those values are read from the launcher at completion time via `profiles --json` and `modes --json`, not from a list baked into the completion file. Add a profile to `config/modes.json` and it completes on the next TAB — no regeneration, no reload. Override the destination with `make install COMPLETION_PREFIX=~/.zsh/completions`.
+
+Only zsh is supported today. bash and fish completions are not shipped; `--backend` and `providers` complete no model slugs, since that would mean a network call to `/models` on every keystroke.
 
 ### Startup connectivity check
 

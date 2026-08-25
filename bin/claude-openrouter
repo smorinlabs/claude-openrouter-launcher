@@ -28,8 +28,8 @@ Quick start:
   claude-openrouter --profile NAME [args…]   pick a backend profile; extra args go to claude
   claude-openrouter --backend SLUG [args…]   use a raw OpenRouter slug (no named profile)
   claude-openrouter --mode MODE [args…]      pick where the backend goes (see 'modes')
-  claude-openrouter profiles                 list profiles
-  claude-openrouter modes                    list modes
+  claude-openrouter profiles [--json]        list profiles
+  claude-openrouter modes [--json]           list modes
   claude-openrouter models [QUERY] [--json]  find a model slug (no key needed)
   claude-openrouter providers SLUG [--sort alpha|cheapest|expensive|reliable] [--json]
                                              who serves a model, and at what ctx/price/speed
@@ -84,15 +84,33 @@ case "${1:-}" in
     exit $?
     ;;
   modes)
+    shift
+    md_json=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --json) md_json=1; shift;;
+        -h|--help) usage; exit 0;;
+        *) col_die "unknown argument '$1' for 'modes' — it takes only --json";;
+      esac
+    done
     col_require jq
     col_load_config
-    col_list_modes
+    col_list_modes "$md_json"
     exit 0
     ;;
   profiles)
+    shift
+    pf_json=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --json) pf_json=1; shift;;
+        -h|--help) usage; exit 0;;
+        *) col_die "unknown argument '$1' for 'profiles' — it takes only --json";;
+      esac
+    done
     col_require jq
     col_load_config
-    col_list_profiles
+    col_list_profiles "$pf_json"
     exit 0
     ;;
   models)

@@ -119,6 +119,13 @@ col_backend_ref() {
 
 # col_list_profiles — print the profiles with their resolved targets.
 col_list_profiles() {
+  # <json> = 1 emits the raw .profiles object (what the zsh completion parses);
+  # anything else keeps the human table. Defaulted so existing callers (doctor)
+  # are untouched.
+  if [ "${1:-0}" = "1" ]; then
+    jq '.profiles // {}' "$COL_CONFIG"
+    return 0
+  fi
   echo "Profiles (config: $COL_CONFIG):"
   # Show the ACTUAL resolved backend (via col_profile_backend_ref), so a preset
   # that hasn't been set up reports its fallback (e.g. openrouter/fusion or the bare
@@ -228,6 +235,10 @@ col_provider_match() {
 
 # col_list_modes — print the modes from config with their slot mappings.
 col_list_modes() {
+  if [ "${1:-0}" = "1" ]; then
+    jq '.modes // {}' "$COL_CONFIG"
+    return 0
+  fi
   echo "Modes (config: $COL_CONFIG):"
   jq -r '.modes | to_entries[]
     | "  \(.key): default=\(.value.default) opus=\(.value.opus) sonnet=\(.value.sonnet) haiku=\(.value.haiku) subagent=\(.value.subagent)"' "$COL_CONFIG"

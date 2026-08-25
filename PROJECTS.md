@@ -206,3 +206,59 @@ no key. Sorts: `alpha` (default), `cheapest`, `expensive`, `reliable`.
 - `--sort cheapest` → `deepinfra/fp4 $0.93`; `--sort expensive` → `wafer/fast $3.00`;
   `--sort reliable` → `wafer/fast 100% up` (orders diverge from row 3).
 - `providers` with no slug / `--sort fastest` / an unknown slug → clear errors, non-zero.
+
+---
+
+## [x] Project P08: shell completion (v0.7.0)
+**Goal/Requirement**: Ship a zsh completion function so the launcher is discoverable
+from the shell. Complete subcommands, global flags, and — crucially — the *values*
+that are specific to this user's config: `--profile` from their profiles and `--mode`
+from their modes. Wire it into `make install` / `just install` so putting the launcher
+on PATH also makes it complete.
+- Completion values come from the launcher itself, never a hardcoded list, so a
+  profile added to `config/modes.json` completes with no regeneration step.
+- `profiles` and `modes` gain `--json` (matching `models` / `providers` / `presets`,
+  which already have it) so completion parses structured output instead of the
+  human-readable table.
+
+**Out of Scope**
+- bash/fish completion. zsh only: it is the shell this repo targets (`setup.sh`,
+  the README, and the developer's environment are all zsh). Revisit on request.
+- Completing OpenRouter model slugs for `--backend` / `providers`. That needs a
+  network call per TAB against `/models` (417 entries); a cache with an invalidation
+  policy is a separate project.
+- Auto-registering the completion in the user's `.zshrc`. The install target places
+  the file and prints the one line to add; editing a user's shell config is theirs.
+
+### Tests & Tasks
+- [x] [P08-T01] `--json` on `profiles` and `modes`: `col_list_profiles` /
+      `col_list_modes` take a `json` argument and emit the config objects; the
+      subcommands parse `--json`. Today both silently ignore the flag.
+- [x] [P08-T02] `completions/_claude-openrouter` — zsh compdef: subcommands with
+      descriptions, global flags, `--profile`/`--mode` value completion from the
+      launcher, `--sort` values for `providers`, file completion for `--key-file`
+- [x] [P08-T03] Install wiring (`Makefile`, `justfile`) + README "Shell completion"
+      + `usage()` unchanged (completion is not a subcommand)
+- [x] [P08-TS01] `tests/smoke.sh`: `--json` output shape for both commands; the
+      completion file is syntactically valid zsh; the helper that extracts names
+      returns the expected set from the example config
+- [x] Regression Test Status — `just all` green (shellcheck + 32 smoke sections)
+
+### Deliverable
+```bash
+$ claude-openrouter --profile <TAB>
+deepseek  fusion  glm  glm-exacto  glm-fireworks  glm-nitro  ox  qwen
+$ claude-openrouter --mode <TAB>
+extreme  main  subagent
+$ claude-openrouter pro<TAB>
+profiles  providers
+```
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + smoke) pass.
+- `zsh -n completions/_claude-openrouter` exits 0.
+
+### Manual Verification
+- `make install && exec zsh` → `claude-openrouter --profile <TAB>` lists profiles
+  from the user's own `config/modes.json` (including locally-added ones).
+- Adding a profile to `config/modes.json` makes it complete with no other step.
