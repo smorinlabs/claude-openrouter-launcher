@@ -417,7 +417,7 @@ col_doctor() {
     _d_no "config invalid or missing: $COL_CONFIG" "fix the JSON or copy config/modes.json.example"
   fi
   if [ -f "$COL_CONFIG" ] && jq -e . "$COL_CONFIG" >/dev/null 2>&1; then
-    while IFS= read -r line; do _d_det "$line"; done < <(col_list_profiles)
+    while IFS= read -r line; do _d_det "$line"; done < <(col_list_profiles 0)
   fi
 
   echo "--- key & account ---"
