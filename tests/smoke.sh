@@ -225,9 +225,12 @@ exit 0
 EOS
 chmod +x "$prebin/curl"
 curl_url_log="$tmpstate/precheck-urls.txt"
-env -u OPENROUTER_API_KEY PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" lib/check-openrouter.sh >/dev/null 2>&1
-PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" OPENROUTER_API_KEY=test lib/check-openrouter.sh >/dev/null 2>&1
-pre_fail_out="$(PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" CURL_FAIL=1 OPENROUTER_API_KEY=test lib/check-openrouter.sh 2>&1)"
+# check-openrouter.sh resolves ANTHROPIC_AUTH_TOKEN before OPENROUTER_API_KEY, and the
+# clf/clfa launcher wrappers export the former — so both must go for these URL branches
+# to be decided by the case under test rather than by the ambient shell.
+env -u OPENROUTER_API_KEY -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" lib/check-openrouter.sh >/dev/null 2>&1
+env -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" OPENROUTER_API_KEY=test lib/check-openrouter.sh >/dev/null 2>&1
+pre_fail_out="$(env -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" CURL_FAIL=1 OPENROUTER_API_KEY=test lib/check-openrouter.sh 2>&1)"
 if grep -Fxq "https://openrouter.ai/api/v1/models" "$curl_url_log" \
   && grep -Fxq "https://openrouter.ai/api/v1/key" "$curl_url_log" \
   && [[ "$pre_fail_out" == *"can't reach"* ]]; then

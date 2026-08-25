@@ -247,7 +247,7 @@ on PATH also makes it complete.
 ### Deliverable
 ```bash
 $ claude-openrouter --profile <TAB>
-deepseek  fusion  glm  glm-exacto  glm-fireworks  glm-nitro  ox  qwen
+deepseek  fusion  glm  glm-exacto  glm-fireworks  glm-nitro  qwen
 $ claude-openrouter --mode <TAB>
 extreme  main  subagent
 $ claude-openrouter pro<TAB>
