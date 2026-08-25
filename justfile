@@ -1,6 +1,7 @@
 set positional-arguments := true
 
 default_prefix := env_var("HOME") / ".local/bin"
+default_completion_prefix := env_var("HOME") / ".zfunc"
 
 # list recipes
 default:
@@ -37,11 +38,14 @@ modes:
 doctor *args:
     bin/claude-openrouter doctor "$@"
 
-# symlink the launcher onto PATH (prefix defaults to ~/.local/bin)
-install prefix=default_prefix:
-    mkdir -p "{{ prefix }}"
+# symlink the launcher onto PATH + the zsh completion onto fpath
+install prefix=default_prefix completion_prefix=default_completion_prefix:
+    mkdir -p "{{ prefix }}" "{{ completion_prefix }}"
     ln -sf "$(pwd)/bin/claude-openrouter" "{{ prefix }}/claude-openrouter"
     @echo "linked {{ prefix }}/claude-openrouter"
+    ln -sf "$(pwd)/completions/_claude-openrouter" "{{ completion_prefix }}/_claude-openrouter"
+    @echo "linked {{ completion_prefix }}/_claude-openrouter (zsh completion)"
+    @echo 'note: for completion, ensure .zshrc has:  fpath=({{ completion_prefix }} $fpath)  before compinit'
 
 # enable the gitleaks pre-commit hook for this repo
 hooks:

@@ -1,5 +1,9 @@
 DEPS := claude curl jq
 PREFIX ?= $(HOME)/.local/bin
+# zsh reads completion functions from directories on $fpath. ~/.zfunc is the
+# conventional user-owned one; we place the file and print the fpath line to add
+# rather than editing anyone's .zshrc.
+COMPLETION_PREFIX ?= $(HOME)/.zfunc
 
 .PHONY: check lint test setup install hooks
 check:
@@ -18,10 +22,13 @@ setup:
 	./setup.sh $(ARGS)
 
 install:
-	@mkdir -p "$(PREFIX)"
+	@mkdir -p "$(PREFIX)" "$(COMPLETION_PREFIX)"
 	@ln -sf "$(CURDIR)/bin/claude-openrouter" "$(PREFIX)/claude-openrouter"
 	@echo "linked $(PREFIX)/claude-openrouter -> $(CURDIR)/bin/claude-openrouter"
+	@ln -sf "$(CURDIR)/completions/_claude-openrouter" "$(COMPLETION_PREFIX)/_claude-openrouter"
+	@echo "linked $(COMPLETION_PREFIX)/_claude-openrouter (zsh completion)"
 	@case ":$$PATH:" in *":$(PREFIX):"*) ;; *) echo "note: add $(PREFIX) to your PATH";; esac
+	@echo "note: for completion, ensure your .zshrc has:  fpath=($(COMPLETION_PREFIX) \$$fpath)  before compinit"
 
 hooks:
 	@git config core.hooksPath .githooks

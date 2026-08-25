@@ -1,0 +1,92 @@
+#compdef claude-openrouter
+# zsh completion for claude-openrouter.
+#
+# Values for --profile and --mode are read from the launcher at completion time
+# rather than baked in here, so a profile added to config/modes.json completes
+# immediately with no regeneration step. config/modes.json is per-user and
+# gitignored, so a static list in this file could never be right for everyone.
+
+# _claude_openrouter_names <profiles|modes>
+# Prints one name per line. Silent on every failure path (launcher missing, no
+# config, no jq, malformed JSON) so TAB degrades to "no matches" instead of
+# spraying errors over the command line the user is still typing.
+_claude_openrouter_names() {
+  local -a out
+  out=( ${(f)"$( ${words[1]} $1 --json 2>/dev/null | jq -r 'keys[]?' 2>/dev/null )"} )
+  (( ${#out} )) && print -rl -- $out
+}
+
+_claude-openrouter() {
+  local curcontext="$curcontext" state line ret=1
+  typeset -A opt_args
+
+  local -a subcommands
+  subcommands=(
+    'doctor:health check - deps, key, credits, presets, env conflicts'
+    'modes:list modes and their per-slot models'
+    'profiles:list profiles and their resolved targets'
+    'models:find an OpenRouter model slug (public API, no key needed)'
+    'providers:who serves a model, at what context/price/uptime'
+    'presets:list the OpenRouter presets on your account'
+  )
+
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[show usage]' \
+    '(-g --go)'{-g,--go}'[launch the defaults, no extra args needed]' \
+    '(--profile --backend)--profile[backend profile]:profile:->profile' \
+    '(--backend --profile)--backend[raw OpenRouter model slug]:slug:' \
+    '--mode[where the backend is used]:mode:->mode' \
+    '--key[OpenRouter API key]:key:' \
+    '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+    '(--show-settings --dry-run)'{--show-settings,--dry-run}'[print the resolved settings and exit]' \
+    '--cost[report OpenRouter spend for the session]' \
+    '1:command:->command' \
+    '*::arg:->args' && ret=0
+
+  case $state in
+    command)
+      _describe -t commands 'claude-openrouter command' subcommands && ret=0
+      ;;
+    profile)
+      local -a profiles
+      profiles=( ${(f)"$(_claude_openrouter_names profiles)"} )
+      (( ${#profiles} )) && { _describe -t profiles 'profile' profiles && ret=0 }
+      ;;
+    mode)
+      local -a modes
+      modes=( ${(f)"$(_claude_openrouter_names modes)"} )
+      (( ${#modes} )) && { _describe -t modes 'mode' modes && ret=0 }
+      ;;
+    args)
+      case ${line[1]} in
+        providers)
+          _arguments \
+            '--sort[ordering]:sort:(alpha cheapest expensive reliable)' \
+            '--json[emit raw JSON]' \
+            '1:model slug:' && ret=0
+          ;;
+        models)
+          _arguments '--json[emit raw JSON]' '1:search query:' && ret=0
+          ;;
+        presets)
+          _arguments \
+            '--json[emit raw JSON]' \
+            '--key[OpenRouter API key]:key:' \
+            '--key-file[file containing OPENROUTER_API_KEY]:file:_files' && ret=0
+          ;;
+        profiles|modes)
+          _arguments '--json[emit raw JSON]' && ret=0
+          ;;
+        doctor)
+          _arguments \
+            '--key[OpenRouter API key]:key:' \
+            '--key-file[file containing OPENROUTER_API_KEY]:file:_files' && ret=0
+          ;;
+      esac
+      ;;
+  esac
+
+  return ret
+}
+
+_claude-openrouter "$@"

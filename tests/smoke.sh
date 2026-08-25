@@ -225,9 +225,12 @@ exit 0
 EOS
 chmod +x "$prebin/curl"
 curl_url_log="$tmpstate/precheck-urls.txt"
-PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" lib/check-openrouter.sh >/dev/null 2>&1
-PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" OPENROUTER_API_KEY=test lib/check-openrouter.sh >/dev/null 2>&1
-pre_fail_out="$(PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" CURL_FAIL=1 OPENROUTER_API_KEY=test lib/check-openrouter.sh 2>&1)"
+# check-openrouter.sh resolves ANTHROPIC_AUTH_TOKEN before OPENROUTER_API_KEY, and the
+# clf/clfa launcher wrappers export the former — so both must go for these URL branches
+# to be decided by the case under test rather than by the ambient shell.
+env -u OPENROUTER_API_KEY -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" lib/check-openrouter.sh >/dev/null 2>&1
+env -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" OPENROUTER_API_KEY=test lib/check-openrouter.sh >/dev/null 2>&1
+pre_fail_out="$(env -u ANTHROPIC_AUTH_TOKEN PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" CURL_FAIL=1 OPENROUTER_API_KEY=test lib/check-openrouter.sh 2>&1)"
 if grep -Fxq "https://openrouter.ai/api/v1/models" "$curl_url_log" \
   && grep -Fxq "https://openrouter.ai/api/v1/key" "$curl_url_log" \
   && [[ "$pre_fail_out" == *"can't reach"* ]]; then
@@ -827,6 +830,68 @@ if [ "$(printf '%s' "$p_json" | jq -r 'length')" = "2" ] \
   ok "presets: --json account array"
 else
   bad "presets: --json account array" "$p_json"
+fi
+
+# 30. 'profiles --json' / 'modes --json' — structured output the zsh completion
+#     parses. Human tables are for humans; a compdef that seds them breaks silently
+#     the next time a column moves.
+pj="$(bin/claude-openrouter profiles --json 2>/dev/null)"
+if printf '%s' "$pj" | jq -e . >/dev/null 2>&1 \
+  && [ "$(printf '%s' "$pj" | jq -r 'keys | join(",")')" = "deepseek,fusion,glm,glm-exacto,glm-fireworks,glm-nitro,qwen" ] \
+  && [ "$(printf '%s' "$pj" | jq -r '.fusion.type')" = "fusion" ]; then
+  ok "profiles: --json object keyed by name"
+else
+  bad "profiles: --json object keyed by name" "$pj"
+fi
+
+mj="$(bin/claude-openrouter modes --json 2>/dev/null)"
+if printf '%s' "$mj" | jq -e . >/dev/null 2>&1 \
+  && [ "$(printf '%s' "$mj" | jq -r 'keys | join(",")')" = "extreme,main,subagent" ] \
+  && [ "$(printf '%s' "$mj" | jq -r '.extreme.subagent')" = "backend" ]; then
+  ok "modes: --json object keyed by name"
+else
+  bad "modes: --json object keyed by name" "$mj"
+fi
+
+# --json must not smuggle the human header into stdout (it would poison $(...) callers).
+if [ "$(bin/claude-openrouter profiles --json 2>/dev/null | head -1)" != "{" ]; then
+  bad "profiles: --json emits no header" "$(bin/claude-openrouter profiles --json 2>/dev/null | head -1)"
+else
+  ok "profiles: --json emits no header"
+fi
+
+# 31. Shell completion: the file exists, is valid zsh, and declares the right compdef.
+if [ -f completions/_claude-openrouter ]; then
+  ok "completion: file present"
+  if command -v zsh >/dev/null 2>&1; then
+    if zsh -n completions/_claude-openrouter 2>/dev/null; then ok "completion: valid zsh syntax"
+    else bad "completion: valid zsh syntax" "$(zsh -n completions/_claude-openrouter 2>&1 | head -3)"; fi
+  else
+    note "completion: valid zsh syntax" "skipped (zsh not installed)"
+  fi
+  if head -1 completions/_claude-openrouter | grep -q '^#compdef claude-openrouter$'; then
+    ok "completion: #compdef tag"
+  else
+    bad "completion: #compdef tag" "$(head -1 completions/_claude-openrouter)"
+  fi
+  # Every subcommand the launcher accepts must be offered by the completion.
+  comp_missing=""
+  for sc in doctor modes profiles models providers presets; do
+    grep -q "^  *'$sc:" completions/_claude-openrouter || comp_missing="$comp_missing $sc"
+  done
+  if [ -z "$comp_missing" ]; then ok "completion: all subcommands offered"
+  else bad "completion: all subcommands offered" "missing:$comp_missing"; fi
+else
+  bad "completion: file present" "completions/_claude-openrouter not found"
+fi
+
+# 32. Install wiring places the completion alongside the launcher symlink.
+inst_root="$tmpstate/instroot"
+make install PREFIX="$inst_root/bin" COMPLETION_PREFIX="$inst_root/zfunc" >/dev/null 2>&1
+if [ -L "$inst_root/bin/claude-openrouter" ] && [ -f "$inst_root/zfunc/_claude-openrouter" ]; then
+  ok "install: links launcher + completion"
+else
+  bad "install: links launcher + completion" "$(find "$inst_root" 2>&1 | head -6)"
 fi
 
 echo "----"
