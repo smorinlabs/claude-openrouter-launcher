@@ -28,8 +28,8 @@ explicit control over which backend handles each kind of work.
 ### 1. Install
 
 Prerequisites: [Claude Code](https://code.claude.com/docs/en/getting-started),
-an [OpenRouter API key](https://openrouter.ai/settings/keys), `git`, `make`,
-`curl`, and `jq`.
+an [OpenRouter API key](https://openrouter.ai/settings/keys), Bash, `git`,
+`make`, `curl`, and `jq`.
 
 ```bash
 git clone https://github.com/smorinlabs/claude-openrouter-launcher.git
@@ -223,6 +223,10 @@ For launcher and legacy commands, key precedence is
 `--key-file` or `OPENROUTER_API_KEY`; they intentionally do not accept a
 plaintext `--key` flag.
 
+Prefer `--key-file` or `OPENROUTER_API_KEY` when using the launcher or legacy
+commands. A key supplied with `--key` can remain in shell history and may be
+visible to other local processes through the process list.
+
 The launcher passes the resolved key to the child `claude` process as
 `ANTHROPIC_AUTH_TOKEN` inside a subshell. It does not write the key to the
 launcher configuration or export it into the parent shell. Key files are parsed
@@ -267,7 +271,7 @@ claude-openrouter preset <command> --help
 ## Development
 
 ```bash
-make check     # verify runtime dependencies
+make check     # verify Claude Code, curl, and jq
 just all       # run shellcheck and no-cost smoke tests
 ```
 

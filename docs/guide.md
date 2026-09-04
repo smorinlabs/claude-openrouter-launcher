@@ -58,7 +58,8 @@ The launcher requires:
 - Bash, `curl`, and `jq` at runtime
 - `git` and `make` for the installation sequence below
 
-Run `make check` from the repository to verify the runtime commands.
+Run `make check` from the repository to verify Claude Code, `curl`, and `jq`.
+Run `bash --version` to verify Bash separately.
 
 ### Standard installation
 
@@ -147,6 +148,10 @@ The launcher and legacy commands resolve a key in this order:
 2. `--key-file FILE`
 3. `OPENROUTER_API_KEY`
 
+Prefer `--key-file` or `OPENROUTER_API_KEY`. A key supplied with `--key` can
+remain in shell history and may be visible to other local processes through
+the process list.
+
 The canonical `preset list`, `preset view`, `preset create`, `preset update`,
 and `preset apply` commands intentionally omit `--key`. They accept
 `--key-file` or the environment variable so the secret is not exposed as a
@@ -187,7 +192,7 @@ Use `--` when a Claude Code flag could be confused with a future launcher flag.
 | `--profile NAME` | Select a local profile |
 | `--backend SLUG` | Use a raw OpenRouter model slug without a profile |
 | `--mode NAME` | Select where the backend is placed |
-| `--key KEY` | Supply the OpenRouter key as an argument |
+| `--key KEY` | Supply the key as an argument; it can appear in shell history and process listings. Prefer `--key-file` or `OPENROUTER_API_KEY` |
 | `--key-file FILE` | Read the key from a file |
 | `--config FILE` | Use one explicit launcher configuration |
 | `--show-settings`, `--dry-run` | Render and print settings without launching |
@@ -235,9 +240,10 @@ It needs no remote preset:
 claude-openrouter --profile deepseek -g
 ```
 
-The bundled configuration also demonstrates OpenRouter routing variants:
+The bundled configuration documents these OpenRouter routing variants and
+includes profiles that use `:nitro` and `:exacto`:
 
-| Suffix | Routing intent represented by the bundled profile |
+| Suffix | Routing intent documented by the bundled configuration |
 |---|---|
 | no suffix | Balanced provider routing |
 | `:nitro` | Prefer throughput |
@@ -570,10 +576,11 @@ claude-openrouter preset update fusion \
   --no-input --yes
 ```
 
-Omitted knobs stay at OpenRouter defaults. Tuning flags are rejected for a
-non-Fusion `preset` profile. The CLI can set or replace a knob but has no
-dedicated unset flag. To remove one, delete that field from the local JSON and
-run `preset apply <profile>` after reviewing the change.
+On create, omitted knobs use OpenRouter defaults. On update, omitted knobs keep
+their current local values. Tuning flags are rejected for a non-Fusion `preset`
+profile. The CLI can set or replace a knob but has no dedicated unset flag. To
+remove one, delete that field from the local JSON and run
+`preset apply <profile>` after reviewing the change.
 
 ### Preview changes
 
@@ -859,13 +866,17 @@ a model-only profile when the extra deliberation is unnecessary.
 
 ## How the integration works
 
-The generated Claude Code settings route Anthropic-compatible requests through
-OpenRouter:
+The launcher routes Anthropic-compatible requests through OpenRouter using a
+combination of generated Claude Code settings and the child-process
+environment:
 
 ```text
+Generated settings:
 ANTHROPIC_BASE_URL=https://openrouter.ai/api
-ANTHROPIC_AUTH_TOKEN=[redacted]
 ANTHROPIC_API_KEY=
+
+Child-process environment:
+ANTHROPIC_AUTH_TOKEN=[redacted]
 ```
 
 The mode populates Claude Code model settings such as
