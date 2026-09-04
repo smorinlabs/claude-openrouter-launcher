@@ -82,12 +82,20 @@ for prof in "${profiles_to_do[@]}"; do
     # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
     judge="$(col_cfg --arg p "$prof" '.profiles[$p].judge_model')"
     panel="$(jq -c --arg p "$prof" '.profiles[$p].panel_models' "$COL_CONFIG")"
+    # Optional tuning knobs; absent keys stay at OpenRouter defaults.
+    # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+    knobs="$(jq -c --arg p "$prof" '.profiles[$p]
+      | {max_tool_calls: .max_tool_calls, temperature: .temperature,
+         max_completion_tokens: .max_completion_tokens, reasoning: .reasoning}
+      | with_entries(select(.value != null))' "$COL_CONFIG")"
     echo "setup: creating OpenRouter preset '$slug' (profile '$prof', fusion)"
     echo "       panel: $(echo "$panel" | jq -r 'join(", ")')"
     echo "       judge: $judge"
-    body="$(jq -n --argjson panel "$panel" --arg judge "$judge" '{
+    [ "$knobs" = "{}" ] || echo "       knobs: $(echo "$knobs" | jq -c .)"
+    body="$(jq -n --argjson panel "$panel" --arg judge "$judge" --argjson knobs "$knobs" '{
       model: "openrouter/fusion",
-      tools: [{ type: "openrouter:fusion", parameters: { analysis_models: $panel, model: $judge } }],
+      tools: [{ type: "openrouter:fusion",
+                parameters: ({ analysis_models: $panel, model: $judge } + $knobs) }],
       tool_choice: "required",
       messages: [{ role: "user", content: "(ignored on preset create)" }]
     }')"
@@ -121,14 +129,17 @@ for prof in "${profiles_to_do[@]}"; do
   ok=0
   if [ "$ptype" = "fusion" ]; then
     # Verify the persisted preset matches config on the same fields doctor diffs
-    # (panel + judge + tool_choice), so a silently-rewritten preset isn't marked ready.
+    # (panel + judge + tool_choice + knobs), so a silently-rewritten preset
+    # isn't marked ready.
     has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
     live_panel="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")' 2>/dev/null || true)"
     live_judge="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // empty' 2>/dev/null || true)"
     live_tc="$(echo "$resp" | jq -r '.data.designated_version.config.tool_choice // empty' 2>/dev/null || true)"
+    live_knobs="$(echo "$resp" | jq -c '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters][0] // {}' 2>/dev/null || echo '{}')"
     cfg_panel="$(echo "$panel" | jq -r 'join(", ")')"
     if [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] \
-       && [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$judge" ] && [ "$live_tc" = "required" ]; then
+       && [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$judge" ] && [ "$live_tc" = "required" ] \
+       && col_provider_match "$live_knobs" "$knobs"; then
       ok=1
     fi
   else

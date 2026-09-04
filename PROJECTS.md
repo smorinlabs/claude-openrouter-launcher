@@ -262,3 +262,123 @@ profiles  providers
 - `make install && exec zsh` → `claude-openrouter --profile <TAB>` lists profiles
   from the user's own `config/modes.json` (including locally-added ones).
 - Adding a profile to `config/modes.json` makes it complete with no other step.
+
+---
+
+## [x] Project P09: preset inspection and management commands (v0.8.0)
+**Goal/Requirement**: Expose the complete preset lifecycle through a canonical
+`preset` command group. Users can list account presets, inspect one local/remote
+definition, interactively create or update a profile, and synchronize one or all
+preset-backed profiles without editing JSON by hand.
+
+### Contract
+
+- `preset list`, `preset view`, `preset create`, `preset update`, and `preset apply`.
+- Interactive prompting by default; flags plus `--no-input --yes` for automation.
+- `table`, `json`, and list-only `name` output formats; structured machine errors.
+- Atomic local writes with backup, lock, signal cleanup, and an exact recovery command
+  when remote synchronization fails after the local save.
+- `presets` remains as the legacy account-listing command.
+
+### Tests & Tasks
+
+- [x] [P09-T01] `lib/presets.sh`: parsers, help, inspection, prompting, validation,
+      safe config writes, create/update, and apply orchestration
+- [x] [P09-T02] `bin/claude-openrouter`: canonical group dispatch and global
+      `--config FILE`
+- [x] [P09-T03] `lib/common.sh`: sorted preset formats and canonical recovery hints
+- [x] [P09-T04] zsh action/flag/profile completion; README lifecycle documentation;
+      approved design record
+- [x] [P09-TS01] no-cost smoke coverage for list/view/create/update/apply, dry-run,
+      conflicts, locking, JSON errors, remote failure recovery, and readiness markers
+- [x] [P09-TS02] Live verification (2026-09-04): `cc-live-probe` created,
+      `preset view` `in-sync`, updated, `preset apply` recreated readiness
+      (plus P10/P11 live steps on the same preset)
+
+### Automated Verification
+
+- `make check`, then `just all` (shellcheck + no-cost smoke suite) pass.
+- Interactive `preset create interactive-probe --dry-run` prints the plan and leaves
+  both the config and lock state unchanged.
+
+### Manual Verification
+
+- Create a disposable profile with `preset create`, confirm `preset view` reports
+  `in-sync`, update it, and confirm `preset apply` recreates its readiness marker.
+- Remove the disposable remote preset from the OpenRouter dashboard after testing.
+
+---
+
+## [~] Project P11: fusion tuning knobs (v0.9.0)
+**Goal/Requirement**: Expose OpenRouter's Fusion run parameters as optional
+fusion-profile fields, persisted through the `tools[].parameters` object the
+launcher already stores (live-verified 2026-09-04 to round-trip, unlike the
+`plugins` form, which presets silently drop). Knobs: `max_tool_calls` (1–16),
+`temperature` (0–2, panel only), `max_completion_tokens` (positive int),
+`reasoning` (`effort` string + `max_tokens` positive int). Absent knobs mean
+OpenRouter defaults; update inherits unspecified knobs; drift detection covers
+them.
+
+**Out of Scope**
+- The curated `preset` base slug (redundant when an explicit panel is set).
+- Unsetting a knob back to default (no `--no-*` flags; recreate the profile).
+- `plugins`-form migration (rejected by live probe — see P10 notes).
+
+### Tests & Tasks
+- [x] [P11-T01] `lib/presets.sh`: knob flags, range validation, update inherit,
+      plan/view display, knob-aware sync status; `setup.sh`: knobs in remote
+      body + verification; `lib/common.sh` doctor knobs drift detail;
+      completions + README + usage
+- [x] [P11-TS01] `tests/smoke.sh` 29d3: create with all knobs (config + remote
+      body), update inherits/changes one, range rejections, panel untouched
+- [x] [P11-TS02] Live verification (2026-09-04): `cc-live-probe` created with
+      `--max-tool-calls 2`; `preset view` reported `in-sync` with knobs shown
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + no-cost smoke suite) pass.
+
+### Manual Verification
+- `preset update fusion --max-tool-calls 2 --dry-run` shows the knob in the
+  plan and leaves the config unchanged.
+
+---
+
+## [~] Project P10: additive fusion panel editing (v0.9.0)
+**Goal/Requirement**: Change single entries on a fusion preset's panel without
+retyping the whole list. `preset update` gains repeatable `--add-panel-model`
+and `--remove-panel-model` flags (update only); `--panel-model` keeps its
+replace-the-whole-panel semantics and is now documented as such in `--help`,
+the zsh completion, and the README.
+
+**Out of Scope**
+- Additive provider editing for `type: "preset"` profiles.
+- Fusion form migration — step A probe (2026-09-04, live account) resolved it:
+  the `plugins` form is accepted but silently dropped from stored preset config
+  (bare alias + `tool_choice` persisted; custom panel lost), while the `tools`
+  form round-trips fully, including new knobs (`max_tool_calls`, `temperature`
+  verified persisted). Decision: keep the `tools` form; new-knob exposure is
+  viable via `tools[].parameters` (step C pending approval).
+
+### Tests & Tasks
+- [x] [P10-T01] `lib/presets.sh`: `--add/--remove-panel-model` parsing (repeatable
+      and `=` forms), `col_preset_apply_panel_edits` merge (removals first,
+      idempotent adds, `not_found` on unknown removal), update-only / fusion-only /
+      no-mix-with-`--panel-model` validation, merged panel in dry-run plan and
+      interactive default
+- [x] [P10-T02] `--help` documents replace vs additive semantics; zsh completion
+      offers the new flags on `update`; README documents both forms with an example
+- [x] [P10-TS01] `tests/smoke.sh` 29d2: add keeps panel + syncs remote body,
+      idempotent add, combined add+remove, misuse matrix (unknown member → 1,
+      empty panel / mixed flags / create / preset-type → 2, panel untouched),
+      additive dry-run previews without writing, completion offers new flags
+- [x] [P10-TS02] Live verification (2026-09-04): added `z-ai/glm-5.2` to
+      `cc-live-probe`, `in-sync` with 3-model panel; removed it, `in-sync`
+      with 2-model panel
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + no-cost smoke suite) pass.
+
+### Manual Verification
+- `preset update fusion --add-panel-model <slug> --dry-run` shows the merged panel
+  and leaves the config unchanged; without `--dry-run`, `preset view fusion`
+  reports `in-sync` with the new member.

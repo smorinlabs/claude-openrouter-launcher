@@ -27,6 +27,7 @@ _claude-openrouter() {
     'profiles:list profiles and their resolved targets'
     'models:find an OpenRouter model slug (public API, no key needed)'
     'providers:who serves a model, at what context/price/uptime'
+    'preset:list, view, create, update, or apply OpenRouter presets'
     'presets:list the OpenRouter presets on your account'
   )
 
@@ -38,6 +39,7 @@ _claude-openrouter() {
     '--mode[where the backend is used]:mode:->mode' \
     '--key[OpenRouter API key]:key:' \
     '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+    '--config[explicit launcher configuration]:file:_files' \
     '(--show-settings --dry-run)'{--show-settings,--dry-run}'[print the resolved settings and exit]' \
     '--cost[report OpenRouter spend for the session]' \
     '1:command:->command' \
@@ -73,6 +75,102 @@ _claude-openrouter() {
             '--json[emit raw JSON]' \
             '--key[OpenRouter API key]:key:' \
             '--key-file[file containing OPENROUTER_API_KEY]:file:_files' && ret=0
+          ;;
+        preset)
+          local preset_action="${line[2]:-}"
+          local -a preset_profiles
+          preset_profiles=( ${(f)"$(_claude_openrouter_names profiles)"} )
+          case $preset_action in
+            list)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+                '--config[explicit launcher configuration]:file:_files' \
+                '(-o --output)'{-o,--output}'[output format]:format:(table json name)' \
+                '--json[emit JSON]' \
+                '(-h --help)'{-h,--help}'[show usage]' && ret=0
+              ;;
+            view)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                "2:profile:(${preset_profiles})" \
+                '--slug[remote preset slug]:slug:' \
+                '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+                '--config[explicit launcher configuration]:file:_files' \
+                '(-o --output)'{-o,--output}'[output format]:format:(table json)' \
+                '--json[emit JSON]' \
+                '(-h --help)'{-h,--help}'[show usage]' && ret=0
+              ;;
+            create)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                '2:new profile name:' \
+                '--type[profile type]:type:(preset fusion)' \
+                '--preset-slug[remote preset slug]:slug:' \
+                '--model[model slug for a provider-pinned preset]:slug:' \
+                '*--provider[allowed provider tag]:tag:' \
+                '*--panel-model[fusion panel model]:slug:' \
+                '--judge-model[fusion judge model]:slug:' \
+                '--max-tool-calls[fusion web-search steps 1-16]:n:' \
+                '--temperature[fusion panel temperature 0-2]:t:' \
+                '--max-completion-tokens[max output tokens per inner call]:n:' \
+                '--reasoning-effort[reasoning effort for panel and analyst]:effort:' \
+                '--reasoning-max-tokens[reasoning token budget]:n:' \
+                '--fallback[fallback model slug]:slug:' \
+                '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+                '--config[configuration file to modify]:file:_files' \
+                '--dry-run[show changes without writing]' \
+                '(-y --yes)'{-y,--yes}'[confirm the displayed changes]' \
+                '--no-input[never prompt for missing input]' \
+                '(-o --output)'{-o,--output}'[output format]:format:(table json)' \
+                '--json[emit JSON]' \
+                '(-h --help)'{-h,--help}'[show usage]' && ret=0
+              ;;
+            update)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                "2:profile:(${preset_profiles})" \
+                '--type[profile type]:type:(preset fusion)' \
+                '--preset-slug[remote preset slug]:slug:' \
+                '--model[model slug for a provider-pinned preset]:slug:' \
+                '*--provider[allowed provider tag]:tag:' \
+                '*--panel-model[fusion panel model (replaces whole panel)]:slug:' \
+                '*--add-panel-model[add one fusion panel model]:slug:' \
+                '*--remove-panel-model[remove one fusion panel model]:slug:' \
+                '--judge-model[fusion judge model]:slug:' \
+                '--max-tool-calls[fusion web-search steps 1-16]:n:' \
+                '--temperature[fusion panel temperature 0-2]:t:' \
+                '--max-completion-tokens[max output tokens per inner call]:n:' \
+                '--reasoning-effort[reasoning effort for panel and analyst]:effort:' \
+                '--reasoning-max-tokens[reasoning token budget]:n:' \
+                '--fallback[fallback model slug]:slug:' \
+                '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+                '--config[configuration file to modify]:file:_files' \
+                '--dry-run[show changes without writing]' \
+                '(-y --yes)'{-y,--yes}'[confirm the displayed changes]' \
+                '--no-input[never prompt for missing input]' \
+                '(-o --output)'{-o,--output}'[output format]:format:(table json)' \
+                '--json[emit JSON]' \
+                '(-h --help)'{-h,--help}'[show usage]' && ret=0
+              ;;
+            apply)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                "2:profile:(${preset_profiles})" \
+                '--all[apply every preset-backed profile]' \
+                '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
+                '--config[explicit launcher configuration]:file:_files' \
+                '--dry-run[show profiles without synchronizing]' \
+                '(-o --output)'{-o,--output}'[output format]:format:(table json)' \
+                '--json[emit JSON]' \
+                '(-h --help)'{-h,--help}'[show usage]' && ret=0
+              ;;
+            *)
+              _arguments \
+                '1:preset command:(list view create update apply)' \
+                '*:preset argument:' && ret=0
+              ;;
+          esac
           ;;
         profiles|modes)
           _arguments '--json[emit raw JSON]' && ret=0

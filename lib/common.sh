@@ -9,17 +9,29 @@ COL_CONFIG_EXAMPLE="$COL_ROOT/config/modes.json.example"
 # default): explicit $CLAUDE_OPENROUTER_CONFIG > user's config/modes.json > example.
 if [ -n "${CLAUDE_OPENROUTER_CONFIG:-}" ]; then
   COL_CONFIG="$CLAUDE_OPENROUTER_CONFIG"
+  COL_CONFIG_SOURCE="env"
 elif [ -f "$COL_ROOT/config/modes.json" ]; then
   COL_CONFIG="$COL_ROOT/config/modes.json"
+  COL_CONFIG_SOURCE="local"
 else
   COL_CONFIG="$COL_CONFIG_EXAMPLE"
+  COL_CONFIG_SOURCE="example"
 fi
 COL_STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openrouter"
 # shellcheck disable=SC2034  # OR_API is used by setup.sh (which sources this file)
 OR_API="https://openrouter.ai/api/v1"
 
-col_die() { echo "claude-openrouter: $*" >&2; exit 1; }
+col_die_code() { local code="$1"; shift; echo "claude-openrouter: $*" >&2; exit "$code"; }
+col_die() { col_die_code 1 "$@"; }
 col_warn() { echo "claude-openrouter: $*" >&2; }
+
+# col_set_config <path> — select one explicit config file for this invocation.
+col_set_config() {
+  [ -n "${1:-}" ] || col_die_code 2 "--config needs a path"
+  COL_CONFIG="$1"
+  # shellcheck disable=SC2034  # consumed by lib/presets.sh after this file is sourced
+  COL_CONFIG_SOURCE="explicit"
+}
 
 # col_require <tool>... — fail if any tool is missing from PATH.
 col_require() {
@@ -363,16 +375,27 @@ col_list_providers() {
 # cross-reference them against the config's preset-backed profiles. Surfaces what
 # neither 'profiles' (config-side) nor doctor (only checks referenced presets) can:
 # orphans (on the account, unreferenced) and missing (referenced, absent upstream).
-# <json>=1 emits the raw account presets array. Needs a key.
+# <format> is 0/table, 1/json, or name. Needs a key.
 col_list_presets() {
-  local key="$1" json="${2:-0}" resp arr cfg
+  local key="$1" format="${2:-0}" resp arr cfg
   resp="$(col_or_get "$key" "presets" 2>/dev/null)" \
-    || col_die "couldn't list presets — check your key/network, or run 'claude-openrouter doctor'"
+    || {
+      if command -v col_preset_fail >/dev/null 2>&1 && [ "${COL_PRESET_CONTEXT:-0}" = "1" ]; then
+        col_preset_fail 1 "remote_unavailable" "couldn't list presets — check your key/network, or run 'claude-openrouter doctor'"
+      fi
+      col_die "couldn't list presets — check your key/network, or run 'claude-openrouter doctor'"
+    }
   # As above: a non-JSON / unexpected-shape 200 must not surface as a jq parse error.
   printf '%s' "$resp" | jq -e '(.data // .) | type == "array"' >/dev/null 2>&1 \
-    || col_die "OpenRouter returned an unreadable /presets response — try again, or run 'claude-openrouter doctor'"
-  arr="$(printf '%s' "$resp" | jq -c '(.data // .)')"
-  if [ "$json" = "1" ]; then printf '%s' "$arr" | jq .; return 0; fi
+    || {
+      if command -v col_preset_fail >/dev/null 2>&1 && [ "${COL_PRESET_CONTEXT:-0}" = "1" ]; then
+        col_preset_fail 1 "invalid_response" "OpenRouter returned an unreadable /presets response — try again, or run 'claude-openrouter doctor'"
+      fi
+      col_die "OpenRouter returned an unreadable /presets response — try again, or run 'claude-openrouter doctor'"
+    }
+  arr="$(printf '%s' "$resp" | jq -c '(.data // .) | sort_by(.slug)')"
+  if [ "$format" = "1" ] || [ "$format" = "json" ]; then printf '%s' "$arr" | jq .; return 0; fi
+  if [ "$format" = "name" ]; then printf '%s' "$arr" | jq -r '.[].slug'; return 0; fi
 
   cfg="$(jq -c '[.profiles | to_entries[]
     | select(.value.type == "fusion" or .value.type == "preset")
@@ -390,7 +413,7 @@ col_list_presets() {
           else "  \($s | pad($w))  ⚠ orphan — no profile references it" end )
     , ( $cfg[]
         | select(.slug as $s | ($aslugs | index($s)) == null)
-        | "  \(.slug | pad($w))  ✗ missing — profile: \(.profile) — run ./setup.sh --profile \(.profile)" )'
+        | "  \(.slug | pad($w))  ✗ missing — profile: \(.profile) — run claude-openrouter preset apply \(.profile)" )'
   echo "  (orphans are harmless; delete them at https://openrouter.ai/settings/presets)"
   return 0
 }
@@ -461,22 +484,30 @@ col_doctor() {
               pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
               if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
                 _d_ok "preset '$slug' configured (profile '$prof', custom panel)"
-                col_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run ./setup.sh to write it"
-                local live_panel live_judge live_tc cfg_panel cfg_judge
+                col_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run claude-openrouter preset apply $prof to write it"
+                local live_panel live_judge live_tc cfg_panel cfg_judge live_knobs cfg_knobs
                 live_panel="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")')"
                 live_judge="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // "?"')"
                 live_tc="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.tool_choice // "?"')"
+                live_knobs="$(printf '%s' "$pinfo" | jq -c '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters][0] | del(.analysis_models, .model)')"
                 _d_det "panel: $live_panel"
                 _d_det "judge: $live_judge"
+                [ "$live_knobs" = "{}" ] || _d_det "knobs: $live_knobs"
                 _d_det "tool_choice: $live_tc"
                 # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
                 cfg_panel="$(col_cfg --arg p "$prof" '.profiles[$p].panel_models | join(", ")')"
                 # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
                 cfg_judge="$(col_cfg --arg p "$prof" '.profiles[$p].judge_model')"
-                if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ]; then
+                # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+                cfg_knobs="$(jq -c --arg p "$prof" '.profiles[$p]
+                  | {max_tool_calls: .max_tool_calls, temperature: .temperature,
+                     max_completion_tokens: .max_completion_tokens, reasoning: .reasoning}
+                  | with_entries(select(.value != null))' "$COL_CONFIG")"
+                if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ] \
+                  && col_provider_match "$live_knobs" "$cfg_knobs"; then
                   _d_ok "preset '$slug' matches config (panel + judge in sync)"
                 else
-                  _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"
+                  _d_warn "preset '$slug' differs from config — run claude-openrouter preset apply $prof to sync"
                   if [ "$live_panel" != "$cfg_panel" ]; then
                     _d_det "panel (config): $cfg_panel"
                     _d_det "panel (live):   $live_panel"
@@ -485,9 +516,13 @@ col_doctor() {
                     _d_det "judge (config): $cfg_judge"
                     _d_det "judge (live):   $live_judge"
                   fi
+                  if ! col_provider_match "$live_knobs" "$cfg_knobs"; then
+                    _d_det "knobs (config): $cfg_knobs"
+                    _d_det "knobs (live):   $live_knobs"
+                  fi
                 fi
               else
-                _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
+                _d_no "preset '$slug' exists but misconfigured (model=$pm)" "run claude-openrouter preset apply $prof"
               fi
             else
               # type "preset": a provider-pinned/parameterized single model.
@@ -496,7 +531,7 @@ col_doctor() {
               cfg_model="$(col_cfg --arg p "$prof" '.profiles[$p].model')"
               if [ "$pm" = "$cfg_model" ]; then
                 _d_ok "preset '$slug' configured (profile '$prof', model $pm)"
-                col_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run ./setup.sh to write it"
+                col_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run claude-openrouter preset apply $prof to write it"
                 live_prov="$(printf '%s' "$pinfo" | jq -c '.data.designated_version.config.provider // {}')"
                 # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
                 cfg_prov="$(jq -c --arg p "$prof" '.profiles[$p].provider // {}' "$COL_CONFIG")"
@@ -505,16 +540,16 @@ col_doctor() {
                 if col_provider_match "$live_prov" "$cfg_prov"; then
                   _d_ok "preset '$slug' matches config (model + provider in sync)"
                 else
-                  _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"
+                  _d_warn "preset '$slug' differs from config — run claude-openrouter preset apply $prof to sync"
                   _d_det "provider (config): $cfg_prov"
                   _d_det "provider (live):   $live_prov"
                 fi
               else
-                _d_no "preset '$slug' exists but model mismatch (model=$pm, expected $cfg_model)" "re-run ./setup.sh"
+                _d_no "preset '$slug' exists but model mismatch (model=$pm, expected $cfg_model)" "run claude-openrouter preset apply $prof"
               fi
             fi
           else
-            _d_warn "preset '$slug' (profile '$prof') not found for this key" "run ./setup.sh (launcher uses the profile's fallback until then)"
+            _d_warn "preset '$slug' (profile '$prof') not found for this key" "run claude-openrouter preset apply $prof (launcher uses the profile's fallback until then)"
           fi
         done < <(col_preset_backed_profiles)
       else
