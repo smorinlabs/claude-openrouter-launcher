@@ -13,7 +13,7 @@ check:
 
 # shellcheck all scripts
 lint:
-    shellcheck bin/claude-openrouter setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
+    shellcheck bin/claude-openrouter setup.sh lib/common.sh lib/presets.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
 
 # run no-cost smoke tests
 test:

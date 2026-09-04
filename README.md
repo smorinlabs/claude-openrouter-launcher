@@ -94,6 +94,11 @@ cp config/modes.json.example config/modes.json
   }
   ```
 
+Preset-backed profiles can also be created or updated with the interactive
+`claude-openrouter preset create` and `claude-openrouter preset update`
+commands described below. Those commands save `config/modes.json` atomically
+and synchronize the remote OpenRouter preset.
+
 ---
 
 ## Profiles
@@ -157,24 +162,131 @@ Providers for z-ai/glm-5.2 (28 serving):
 
 > OpenRouter returns `throughput`/`latency` as `null` on this endpoint, so there's no speed column — `uptime` is the perf signal that's actually populated. (Use `:nitro` on a model slug if you want throughput-sorted routing.)
 
-### Listing your account's presets
+### Comparing remote presets and local profiles
 
-`presets` lists the OpenRouter presets on your **account** and cross-references them against your config — surfacing what `profiles` (config-side) and `doctor` (only checks *referenced* presets) can't:
+`preset list` shows one inventory built from both the remote OpenRouter account
+and the local launcher configuration:
 
 ```bash
-claude-openrouter presets --key-file ~/.config/openrouter.env
+claude-openrouter preset list --key-file ~/.config/openrouter.env
 ```
+```text
+Presets
+
+Remote source: OpenRouter account for the resolved API key
+Local source:  /path/to/claude-openrouter-launcher/config/modes.json
+
+PRESET SLUG                      OPENROUTER  LOCAL PROFILE  LINK STATE
+cc-fusion                        present     fusion         linked
+cc-fusion-probe                  present     (none)         not linked to this config
+cc-glm-fireworks                 present     glm-fireworks  linked
+cc-manual-test-20260903220944    present     (none)         not linked to this config
+
+Summary: 4 preset slugs · 2 linked · 2 not linked · 0 missing from OpenRouter
+
+Inspect a linked preset:       claude-openrouter preset view <local-profile>
+Inspect an unlinked preset:    claude-openrouter preset view --slug <preset-slug>
 ```
-Presets (OpenRouter account — 3 total):
-  cc-fusion         ← profile: fusion
-  cc-glm-fireworks  ← profile: glm-fireworks
-  cc-fusion-probe   ⚠ orphan — no profile references it
-```
-**orphan** = on your account but no profile points at it (harmless leftovers, e.g. after a slug rename). **missing** = a profile references it but it isn't on the account → run `./setup.sh --profile <name>`.
+
+The columns have distinct meanings:
+
+| Column | Meaning |
+|---|---|
+| `PRESET SLUG` | The identifier used to connect a local profile to an OpenRouter preset. The inventory includes every slug found in either source. |
+| `OPENROUTER` | `present` when the preset exists in the remote account; otherwise `missing`. |
+| `LOCAL PROFILE` | The profile name in the local configuration, or `(none)` when this configuration does not reference the slug. |
+| `LINK STATE` | The relationship between the remote preset and local profile: `linked`, `not linked to this config`, or `missing from OpenRouter`. |
+
+When a local profile is `missing from OpenRouter`, the output also shows
+`claude-openrouter preset apply <local-profile>` as the synchronization command.
+On a narrow terminal, the same fields appear as stacked records instead of a
+wide table. `--json` and `-o name` retain their remote-account-only formats for
+scripts.
 
 > **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
 >
 > **Upgrading to v0.4.0 (rename):** the project was renamed to **Claude OpenRouter Launcher** (clean break, no aliases). The binary is now **`claude-openrouter`** (was `claude-fusion`), the config env var is **`CLAUDE_OPENROUTER_CONFIG`** (was `CLAUDE_FUSION_CONFIG`), and state lives in **`~/.config/claude-openrouter`** (was `~/.config/claude-fusion`). Re-run `./setup.sh` once so preset markers land in the new state dir; your OpenRouter presets (`cc-fusion`, etc.) are unchanged. If you symlinked the old binary, re-run `make install` / `just install`.
+
+### Inspecting and managing presets
+
+`preset` is the canonical command group for the complete preset lifecycle. A
+**profile** is the local name selected with `--profile`; its `preset_slug`
+identifies the remote OpenRouter preset.
+
+```bash
+claude-openrouter preset list                         # remote presets + local profiles
+claude-openrouter preset list -o name                 # slugs only, sorted
+claude-openrouter preset view fusion                  # local + remote config and drift
+claude-openrouter preset view --slug cc-orphan --json # inspect an unlinked preset
+claude-openrouter preset create team-glm              # interactive create + save + sync
+claude-openrouter preset update team-glm              # interactive edit + save + sync
+claude-openrouter preset apply team-glm               # re-sync one existing profile
+claude-openrouter preset apply --all                  # re-sync every preset-backed profile
+```
+
+The interactive create/update flow supports the two preset shapes the launcher
+already understands: `preset` for one model pinned to one or more providers,
+and `fusion` for a panel plus judge. It displays the local and remote changes
+before asking for confirmation.
+
+Automation uses the same implementation without prompts. Repeat `--provider`
+or `--panel-model` for multiple values:
+
+```bash
+claude-openrouter preset create team-glm \
+  --type preset \
+  --preset-slug cc-team-glm \
+  --model z-ai/glm-5.2 \
+  --provider fireworks \
+  --fallback z-ai/glm-5.2 \
+  --key-file ~/.config/openrouter.env \
+  --no-input --yes
+```
+
+Editing a fusion panel is additive or replacement — pick one per invocation.
+`--panel-model` **replaces** the whole panel, so re-specify every model you want
+to keep. `--add-panel-model` / `--remove-panel-model` (repeatable, `update`
+only) change single entries and leave the rest alone:
+
+```bash
+claude-openrouter preset update fusion \
+  --add-panel-model deepseek/deepseek-v3.2 \
+  --remove-panel-model qwen/qwen3-coder-plus \
+  --no-input --yes
+```
+
+Adding a model that is already on the panel is a no-op; removing one that isn't
+fails (`not_found`) and leaves the panel untouched. `--dry-run` previews the
+merged panel without writing.
+
+Fusion profiles also accept optional tuning knobs, stored in the preset and
+compared for drift like the panel and judge. Absent knobs stay at OpenRouter
+defaults:
+
+```bash
+claude-openrouter preset update fusion \
+  --max-tool-calls 2 \
+  --temperature 0.7 \
+  --max-completion-tokens 8000 \
+  --reasoning-effort medium \
+  --reasoning-max-tokens 2000 \
+  --no-input --yes
+```
+
+`--max-tool-calls` takes 1–16, `--temperature` 0–2 (panel only; the analyst
+always runs at 0). `preset view` and `doctor` surface knob drift the same way
+they surface panel/judge drift.
+
+Use `--dry-run` to print the plan without writing local or remote state. An
+existing configuration file is backed up as `<config>.bak`, then replaced
+atomically under a short-lived `<config>.lock` directory. If the remote update
+fails after the local file is saved, the readiness marker stays absent and the
+launcher uses the configured fallback. Retry safely with
+`claude-openrouter preset apply <profile-name>`.
+
+`presets [--json]` remains available for compatibility with the original list
+command. New scripts should use `preset list` and the canonical
+`-o table|json|name` output selector.
 
 ---
 
@@ -203,10 +315,12 @@ claude-openrouter modes [--json]                  # list modes and their per-slo
 claude-openrouter profiles [--json]               # list profiles and their targets
 claude-openrouter models [QUERY] [--json]         # find a model slug (public API — no key needed)
 claude-openrouter providers SLUG [--sort …]       # who serves a model, at what ctx/price/uptime
-claude-openrouter presets [--json]                # list your account's presets; flags orphans
+claude-openrouter preset <command>                # list/view/create/update/apply presets
+claude-openrouter presets [--json]                # legacy alias for preset listing
 claude-openrouter doctor                          # health check: deps, key, credits, preset, env conflicts
 claude-openrouter --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
 claude-openrouter --cost --mode … -p …            # run, then report what that session cost on OpenRouter
+claude-openrouter --config FILE preset view NAME  # use one explicit config file
 claude-openrouter --help                          # usage
 ```
 
@@ -238,7 +352,7 @@ Only zsh is supported today. bash and fish completions are not shipped; `--backe
 
 Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-openrouter doctor` — so you aren't surprised by cryptic mid-session errors. Silent on success. Disable with `COL_SKIP_PRECHECK=1`.
 
-It also **verifies preset-backed profiles**: when the active profile resolves to an `@preset/<slug>` (any `fusion` or `preset` profile whose preset has been set up), the launcher confirms that preset still exists on your account with a free, no-inference `GET /presets/<slug>`. If it's missing or deleted, the launcher aborts before starting Claude with a fix hint (`run ./setup.sh --profile <name>`) instead of failing mid-session. Also skipped by `COL_SKIP_PRECHECK=1`.
+It also **verifies preset-backed profiles**: when the active profile resolves to an `@preset/<slug>` (any `fusion` or `preset` profile whose preset has been set up), the launcher confirms that preset still exists on your account with a free, no-inference `GET /presets/<slug>`. If it's missing or deleted, the launcher aborts before starting Claude with a fix hint (`claude-openrouter preset apply <name>`) instead of failing mid-session. Also skipped by `COL_SKIP_PRECHECK=1`.
 
 ---
 
@@ -254,7 +368,7 @@ Run **`claude-openrouter doctor`** first — it checks most of these and prints 
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `preset not set up — using fallback` | You haven't run `./setup.sh` (or switched OpenRouter key/account). Run setup; `doctor` verifies the preset exists for the *current* key. |
+| `preset not set up — using fallback` | The preset has not been synchronized for this OpenRouter key/account. Run `claude-openrouter preset apply <name>`; `doctor` verifies the result. |
 | `OpenRouter rejected the key` | Key wrong/expired, or wrong `--key`/`--key-file`/`OPENROUTER_API_KEY`. |
 | `insufficient credits` / requests fail | Add credits at <https://openrouter.ai/settings/credits>; `doctor` shows your balance. |
 | `model not found` errors | A panel slug in `config/modes.json` is invalid — check it against <https://openrouter.ai/api/v1/models>. |
@@ -274,6 +388,26 @@ Claude Code is pointed at OpenRouter via `ANTHROPIC_BASE_URL=https://openrouter.
 - **Presets are created only via** `POST /api/v1/presets/{slug}/chat/completions` (the direct `POST /api/v1/presets` returns 404).
 
 The connectivity warning is a launcher pre-flight, not a SessionStart hook: such a hook *does* execute, but Claude Code currently **discards SessionStart hook output** on new sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)), so it can't show you the warning. A pre-flight prints reliably.
+
+### Fusion presets and Claude Code
+
+**Why presets matter.** Claude Code's `settings.json` can only route model *names* per slot (via env vars like `ANTHROPIC_DEFAULT_OPUS_MODEL`) — it cannot inject per-request body fields such as a `plugins` array or a `tools` array. So there is no way to tell Claude Code "fuse with this custom panel" inline. An OpenRouter **preset** solves that: the panel + judge config lives server-side under a slug, and the slot just names `@preset/<slug>` as if it were a model.
+
+**How presets and Fusion work together.** `setup.sh` (or `preset create`/`apply`) stores this config on your OpenRouter account via `POST /api/v1/presets/{slug}/chat/completions`:
+
+```json
+{
+  "model": "openrouter/fusion",
+  "tools": [{ "type": "openrouter:fusion",
+               "parameters": { "analysis_models": ["~anthropic/claude-opus-latest", "…"],
+                               "model": "~anthropic/claude-opus-latest" } }],
+  "tool_choice": "required"
+}
+```
+
+Every request naming `@preset/<slug>` then runs the full pipeline: the panel answers in parallel, the judge compares them into structured analysis (consensus, contradictions, blind spots), and the serving model writes the final answer from it. `preset view <name>` shows the stored panel/judge and whether local config still matches (`in-sync`/`drifted`).
+
+**Why the `tools` form, not the newer `plugins` form.** OpenRouter's docs now recommend configuring Fusion per-request with `plugins: [{id: "fusion", …}]`. We tested that form against the live API (2026-09-04) and it **does not work inside presets**: the create call succeeds, but the stored `designated_version.config` silently drops the `plugins` entry, keeping only the bare alias — and inference through such a preset deliberates with the *default* 3-model panel, not the configured one. The `tools` form above round-trips verbatim (panel, judge, `tool_choice`), including newer knobs such as `max_tool_calls` and `temperature` (both verified persisted live). Since presets are our only vehicle into Claude Code, the launcher stays on the `tools` form. If OpenRouter ever persists `plugins` in presets, that decision should be re-tested, not assumed.
 
 ---
 
