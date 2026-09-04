@@ -10,6 +10,15 @@ note() { printf '%-42s %s\n' "$1" "$2"; }
 ok()   { note "$1" "ok"; }
 bad()  { note "$1" "FAIL: ${2:-}"; fail=1; }
 
+if command -v sha256sum >/dev/null 2>&1; then
+  file_digest() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  file_digest() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  printf 'smoke: sha256sum or shasum is required for config-integrity checks\n' >&2
+  exit 1
+fi
+
 # 1. shellcheck (if available)
 if command -v shellcheck >/dev/null 2>&1; then
   if shellcheck bin/claude-openrouter setup.sh lib/common.sh lib/presets.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit; then ok "shellcheck"; else bad "shellcheck"; fi
@@ -30,6 +39,8 @@ export XDG_CONFIG_HOME="$tmpstate"
 trap 'rm -rf "$tmpstate"' EXIT
 # shellcheck source=lib/common.sh
 . lib/common.sh
+# shellcheck source=lib/presets.sh
+. lib/presets.sh
 
 fakebin="$tmpstate/fakebin"; mkdir -p "$fakebin"
 cat > "$fakebin/claude" <<'EOS'
@@ -249,6 +260,8 @@ synced_preset="$(jq -nc \
     tools:[{type:"openrouter:fusion",parameters:{model:$judge,analysis_models:$panel}}]}}}}')"
 drift_preset="$(printf '%s' "$synced_preset" \
   | jq -c '.data.designated_version.config.tools[0].parameters.analysis_models[0]="zzz/drifted-model"')"
+knob_drift_preset="$(printf '%s' "$synced_preset" \
+  | jq -c '.data.designated_version.config.tools[0].parameters.temperature=0.7')"
 
 doctor_ok_out="$(
   PATH="$fakebin:$PATH"
@@ -281,6 +294,21 @@ doctor_drift_out="$(
   }
   col_doctor "test" "env:OPENROUTER_API_KEY"
 )" || drift_rc=$?
+doctor_knob_drift_out="$(
+  PATH="$fakebin:$PATH"
+  col_or_get() {
+    if [ "$2" = "key" ]; then
+      printf '{"data":{"label":"smoke"}}'
+    elif [ "$2" = "credits" ]; then
+      printf '{"data":{"total_credits":10,"total_usage":1}}'
+    elif [ "$2" = "presets/cc-fusion" ]; then
+      printf '%s' "$knob_drift_preset"
+    else
+      return 22
+    fi
+  }
+  col_doctor "test" "env:OPENROUTER_API_KEY"
+)"
 doctor_bad_out="$(
   PATH="$fakebin:$PATH"
   col_or_get() { return 22; }
@@ -297,6 +325,8 @@ if [[ "$doctor_ok_out" == *"key resolved (…test)"* \
   && "$doctor_ok_out" == *"fusion (fusion):"* \
   && "$doctor_drift_out" == *'source: env $OPENROUTER_API_KEY'* \
   && "$doctor_drift_out" == *"differs from config"* && "$doctor_drift_out" == *"zzz/drifted-model"* \
+  && "$doctor_knob_drift_out" == *"differs from config"* \
+  && "$doctor_knob_drift_out" == *'knobs (live):   {"temperature":0.7}'* \
   && "$drift_rc" -eq 0 \
   && "$doctor_bad_out" == *"OpenRouter rejected the key"* ]]; then
   ok "doctor account branch covered"
@@ -854,7 +884,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$url" in
-  */v1/key) if [ "$status_only" -eq 1 ]; then printf '%s' "${PRESET_KEY_STATUS:-200}"; else printf '{"data":{"label":"smoke"}}'; fi ;;
+  */v1/key)
+    if [ -n "${PRESET_KEY_READY_FILE:-}" ]; then
+      : > "$PRESET_KEY_READY_FILE"
+      wait_count=0
+      while [ ! -f "${PRESET_KEY_RELEASE_FILE:-}" ] && [ "$wait_count" -lt 200 ]; do
+        sleep 0.05
+        wait_count=$((wait_count + 1))
+      done
+      [ -f "${PRESET_KEY_RELEASE_FILE:-}" ] || exit 28
+    fi
+    if [ "$status_only" -eq 1 ]; then printf '%s' "${PRESET_KEY_STATUS:-200}"; else printf '{"data":{"label":"smoke"}}'; fi
+    ;;
   */v1/credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
   */v1/presets)
     printf '{"data":[{"slug":"cc-orphan"},{"slug":"cc-fusion"}]}'
@@ -872,10 +913,13 @@ case "$url" in
   */v1/presets/*/chat/completions)
     [ -n "${PRESET_BODY_LOG:-}" ] && printf '%s\n' "$body" >> "$PRESET_BODY_LOG"
     cfg="$(printf '%s' "$body" | jq -c '{model, provider:(.provider//{}), tools:(.tools//[]), tool_choice:(.tool_choice//null)}')"
+    if [ "${PRESET_REMOTE_EXTRA_KNOBS:-0}" = "1" ]; then
+      cfg="$(printf '%s' "$cfg" | jq -c '.tools[0].parameters.temperature = 0.7')"
+    fi
     printf '{"data":{"designated_version":{"config":%s}}}' "$cfg"
     ;;
-  */v1/presets/*) if [ "$status_only" -eq 1 ]; then printf '404'; else return 22; fi ;;
-  *) return 22 ;;
+  */v1/presets/*) if [ "$status_only" -eq 1 ]; then printf '404'; else exit 22; fi ;;
+  *) exit 22 ;;
 esac
 EOS
 chmod +x "$manage_bin/curl"
@@ -885,16 +929,25 @@ pl_names="$("${manage_env[@]}" bin/claude-openrouter preset list -o name 2>/dev/
 pl_json="$("${manage_env[@]}" bin/claude-openrouter preset list --json 2>/dev/null)"
 pv_human="$("${manage_env[@]}" bin/claude-openrouter preset view fusion 2>/dev/null)"
 pv_orphan="$("${manage_env[@]}" bin/claude-openrouter preset view --slug cc-orphan --json 2>/dev/null)"
+scope_probe="$(PATH="$manage_bin:$PATH" OPENROUTER_API_KEY=test \
+  CLAUDE_OPENROUTER_CONFIG="$COL_CONFIG" bash -c '
+    . lib/common.sh
+    . lib/presets.sh
+    col_preset_view_command fusion >/dev/null
+    col_preset_mutation_command update fusion --temperature 0.7 --dry-run --no-input >/dev/null
+    if declare -p remote_knobs knobs_json >/dev/null 2>&1; then printf leak; else printf clean; fi
+  ')"
 if [ "$pl_names" = $'cc-fusion\ncc-orphan' ] \
   && [ "$(printf '%s' "$pl_json" | jq -r '.[0].slug')" = "cc-fusion" ] \
   && [[ "$pv_human" == *"profile: fusion"* && "$pv_human" == *"status: in-sync"* \
        && "$pv_human" == *"panel:"* && "$pv_human" == *"judge: ~anthropic/claude-opus-latest"* ]] \
   && [ "$(printf '%s' "$pv_orphan" | jq -r '.profile')" = "null" ] \
   && [ "$(printf '%s' "$pv_orphan" | jq -r '.status')" = "orphan" ] \
-  && [ "$(printf '%s' "$pv_orphan" | jq -r '.remote.designated_version.config.model')" = "acme/orphan" ]; then
+  && [ "$(printf '%s' "$pv_orphan" | jq -r '.remote.designated_version.config.model')" = "acme/orphan" ] \
+  && [ "$scope_probe" = "clean" ]; then
   ok "preset list/view: human + machine output"
 else
-  bad "preset list/view: human + machine output" "names=$pl_names view=$pv_human orphan=$pv_orphan"
+  bad "preset list/view: human + machine output" "names=$pl_names view=$pv_human orphan=$pv_orphan scope=$scope_probe"
 fi
 
 auth_error="$tmpstate/preset-auth-error.txt"
@@ -966,10 +1019,10 @@ XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset 
   --provider fireworks --no-input --yes >/dev/null 2>&1
 create_conflict_rc=$?
 
-before_dry="$(shasum -a 256 "$manage_cfg" | awk '{print $1}')"
+before_dry="$(file_digest "$manage_cfg")"
 dry_out="$(XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset update team-glm \
   --config "$manage_cfg" --provider together --dry-run --no-input 2>&1)"
-after_dry="$(shasum -a 256 "$manage_cfg" | awk '{print $1}')"
+after_dry="$(file_digest "$manage_cfg")"
 if [ "$create_conflict_rc" -eq 5 ] && [ "$before_dry" = "$after_dry" ] \
   && [[ "$dry_out" == *"Plan:"* && "$dry_out" == *"provider.only: together"* ]]; then
   ok "preset mutation: conflict + dry-run"
@@ -990,6 +1043,38 @@ if [ "$(jq -r '.profiles["team-glm"].provider.only[0]' "$manage_cfg")" = "togeth
   ok "preset update: retains unmanaged fields + writes backup"
 else
   bad "preset update: retains unmanaged fields + writes backup" "$update_out"
+fi
+
+concurrent_cfg="$tmpstate/preset-concurrent.json"; cp "$manage_cfg" "$concurrent_cfg"
+concurrent_ready="$tmpstate/preset-concurrent.ready"
+concurrent_release="$tmpstate/preset-concurrent.release"
+concurrent_first_out="$tmpstate/preset-concurrent-first.out"
+PRESET_KEY_READY_FILE="$concurrent_ready" PRESET_KEY_RELEASE_FILE="$concurrent_release" \
+  XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset update team-glm \
+  --config "$concurrent_cfg" --provider first --no-input --yes > "$concurrent_first_out" 2>&1 &
+concurrent_first_pid=$!
+concurrent_wait=0
+while [ ! -f "$concurrent_ready" ] && [ "$concurrent_wait" -lt 200 ]; do
+  sleep 0.05
+  concurrent_wait=$((concurrent_wait + 1))
+done
+if [ -f "$concurrent_ready" ]; then
+  XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset update team-glm \
+    --config "$concurrent_cfg" --fallback acme/second --no-input --yes >/dev/null 2>&1
+  concurrent_second_rc=$?
+else
+  concurrent_second_rc=99
+fi
+: > "$concurrent_release"
+wait "$concurrent_first_pid"
+concurrent_first_rc=$?
+if [ "$concurrent_first_rc" -eq 0 ] && [ "$concurrent_second_rc" -eq 5 ] \
+  && [ "$(jq -r '.profiles["team-glm"].provider.only[0]' "$concurrent_cfg")" = "first" ] \
+  && [ ! -d "$concurrent_cfg.lock" ]; then
+  ok "preset update: lock covers read/merge/write"
+else
+  bad "preset update: lock covers read/merge/write" \
+    "first=$concurrent_first_rc second=$concurrent_second_rc wait=$concurrent_wait $(cat "$concurrent_first_out")"
 fi
 
 apply_cfg="$tmpstate/preset-apply.json"; cp "$COL_CONFIG" "$apply_cfg"
@@ -1020,7 +1105,7 @@ else
 fi
 
 validation_cfg="$tmpstate/preset-validation.json"; cp "$COL_CONFIG" "$validation_cfg"
-validation_before="$(shasum -a 256 "$validation_cfg" | awk '{print $1}')"
+validation_before="$(file_digest "$validation_cfg")"
 "${manage_env[@]}" bin/claude-openrouter preset create incomplete --config "$validation_cfg" \
   --type preset --preset-slug cc-incomplete --no-input --yes >/dev/null 2>&1
 missing_fields_rc=$?
@@ -1039,7 +1124,7 @@ remote_conflict_rc=$?
 "${manage_env[@]}" bin/claude-openrouter preset update fusion --config "$validation_cfg" \
   --preset-slug cc-orphan --no-input --yes >/dev/null 2>&1
 update_remote_conflict_rc=$?
-validation_after="$(shasum -a 256 "$validation_cfg" | awk '{print $1}')"
+validation_after="$(file_digest "$validation_cfg")"
 mkdir "$validation_cfg.lock"
 "${manage_env[@]}" bin/claude-openrouter preset create locked --config "$validation_cfg" \
   --type preset --preset-slug cc-locked --model acme/model --provider acme \
@@ -1085,7 +1170,8 @@ XDG_CONFIG_HOME="$fusion_state" "${manage_env[@]}" bin/claude-openrouter preset 
   --config "$fusion_cfg" --add-panel-model acme/two --no-input --yes >/dev/null 2>&1
 idem_rc=$?
 combo_out="$(XDG_CONFIG_HOME="$fusion_state" "${manage_env[@]}" bin/claude-openrouter preset update team-fusion \
-  --config "$fusion_cfg" --add-panel-model acme/four --remove-panel-model acme/one --no-input --yes 2>&1)"
+  --config "$fusion_cfg" --add-panel-model acme/four --add-panel-model acme/four \
+  --remove-panel-model acme/one --no-input --yes 2>&1)"
 combo_rc=$?
 if [ "$idem_rc" -eq 0 ] && [ "$combo_rc" -eq 0 ] \
   && jq -e '.profiles["team-fusion"].panel_models == ["acme/two","acme/three","acme/four"]' "$fusion_cfg" >/dev/null \
@@ -1115,7 +1201,7 @@ XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset 
   --config "$manage_cfg" --add-panel-model acme/x --no-input --yes >/dev/null 2>&1
 preset_add_rc=$?
 panel_after="$(jq -c '.profiles["team-fusion"].panel_models' "$fusion_cfg")"
-if [ "$rm_missing_rc" -eq 1 ] && [ "$rm_all_rc" -eq 2 ] && [ "$mix_rc" -eq 2 ] \
+if [ "$rm_missing_rc" -eq 3 ] && [ "$rm_all_rc" -eq 2 ] && [ "$mix_rc" -eq 2 ] \
   && [ "$create_add_rc" -eq 2 ] && [ "$preset_add_rc" -eq 2 ] \
   && [ "$panel_before" = "$panel_after" ]; then
   ok "preset update: additive misuse rejected, panel untouched"
@@ -1124,10 +1210,10 @@ else
     "missing=$rm_missing_rc all=$rm_all_rc mix=$mix_rc create=$create_add_rc preset=$preset_add_rc panel=$panel_after"
 fi
 
-dry_add_before="$(shasum -a 256 "$fusion_cfg" | awk '{print $1}')"
+dry_add_before="$(file_digest "$fusion_cfg")"
 dry_add_out="$(XDG_CONFIG_HOME="$fusion_state" "${manage_env[@]}" bin/claude-openrouter preset update team-fusion \
   --config "$fusion_cfg" --add-panel-model acme/five --dry-run --no-input 2>&1)"
-dry_add_after="$(shasum -a 256 "$fusion_cfg" | awk '{print $1}')"
+dry_add_after="$(file_digest "$fusion_cfg")"
 if [[ "$dry_add_out" == *"Plan:"* && "$dry_add_out" == *"acme/five"* ]] \
   && [ "$dry_add_before" = "$dry_add_after" ] \
   && jq -e '.profiles["team-fusion"].panel_models == ["acme/two","acme/three","acme/four"]' "$fusion_cfg" >/dev/null; then
@@ -1170,7 +1256,19 @@ else
   bad "preset update: one knob changes, rest inherited + synced" "$knob_up_out"
 fi
 
-knobs_before="$(shasum -a 256 "$knob_cfg" | awk '{print $1}')"
+extra_knob_state="$tmpstate/preset-extra-knob-state"
+PRESET_REMOTE_EXTRA_KNOBS=1 XDG_CONFIG_HOME="$extra_knob_state" \
+  "${manage_env[@]}" bin/claude-openrouter preset apply fusion --config "$COL_CONFIG" \
+  >/dev/null 2>&1
+extra_knob_rc=$?
+if [ "$extra_knob_rc" -eq 1 ] \
+  && [ ! -f "$extra_knob_state/claude-openrouter/presets/cc-fusion.json" ]; then
+  ok "preset apply: remote-only managed knob rejected"
+else
+  bad "preset apply: remote-only managed knob rejected" "rc=$extra_knob_rc"
+fi
+
+knobs_before="$(file_digest "$knob_cfg")"
 XDG_CONFIG_HOME="$fusion_state" "${manage_env[@]}" bin/claude-openrouter preset create bad-mtc \
   --config "$knob_cfg" --type fusion --preset-slug cc-bad-mtc \
   --panel-model acme/one --judge-model acme/judge --max-tool-calls 17 \
@@ -1189,7 +1287,7 @@ bad_mct_rc=$?
 XDG_CONFIG_HOME="$manage_state" "${manage_env[@]}" bin/claude-openrouter preset update team-glm \
   --config "$manage_cfg" --max-tool-calls 2 --no-input --yes >/dev/null 2>&1
 preset_knob_rc=$?
-knobs_after="$(shasum -a 256 "$knob_cfg" | awk '{print $1}')"
+knobs_after="$(file_digest "$knob_cfg")"
 if [ "$bad_mtc_rc" -eq 2 ] && [ "$bad_temp_rc" -eq 2 ] && [ "$bad_mct_rc" -eq 2 ] \
   && [ "$preset_knob_rc" -eq 2 ] && [ "$knobs_before" = "$knobs_after" ]; then
   ok "preset mutation: knob range/type rejections, config untouched"
@@ -1215,8 +1313,8 @@ case "$url" in
   */v1/key) if [ "$status_only" -eq 1 ]; then printf '200'; else printf '{"data":{"label":"smoke"}}'; fi ;;
   */v1/credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
   */v1/presets/*/chat/completions) printf '{"error":{"message":"rejected by smoke"}}' ;;
-  */v1/presets/*) if [ "$status_only" -eq 1 ]; then printf '404'; else return 22; fi ;;
-  *) return 22 ;;
+  */v1/presets/*) if [ "$status_only" -eq 1 ]; then printf '404'; else exit 22; fi ;;
+  *) exit 22 ;;
 esac
 EOS
 chmod +x "$fail_bin/curl"
@@ -1304,6 +1402,38 @@ if [ -f completions/_claude-openrouter ]; then
     ok "completion: preset actions and flags offered"
   else
     bad "completion: preset actions and flags offered"
+  fi
+  completion_global_cfg="$(zsh -c '
+    compdef() { :; }
+    _arguments() { return 0; }
+    source "$1/completions/_claude-openrouter"
+    fake_launcher() {
+      if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
+      else print '\''{"default-only":{}}'\''; fi
+    }
+    words=(fake_launcher --config /tmp/other.json preset update)
+    _claude_openrouter_names profiles
+  ' _ "$COL_ROOT")"
+  completion_local_cfg="$(zsh -c '
+    compdef() { :; }
+    _arguments() { return 0; }
+    source "$1/completions/_claude-openrouter"
+    fake_launcher() {
+      if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
+      else print '\''{"default-only":{}}'\''; fi
+    }
+    words=(fake_launcher preset update --config=/tmp/other.json)
+    _claude_openrouter_names profiles
+  ' _ "$COL_ROOT")"
+  if [ "$completion_global_cfg" = "other-only" ] && [ "$completion_local_cfg" = "other-only" ] \
+    && grep -q '"3::profile:' completions/_claude-openrouter \
+    && [ "$(grep -c '3::profile:' completions/_claude-openrouter)" -eq 2 ] \
+    && [ "$(grep -c '3:profile:' completions/_claude-openrouter)" -eq 1 ] \
+    && grep -q "3:new profile name:" completions/_claude-openrouter; then
+    ok "completion: nested positions + explicit config"
+  else
+    bad "completion: nested positions + explicit config" \
+      "global=$completion_global_cfg local=$completion_local_cfg"
   fi
 else
   bad "completion: file present" "completions/_claude-openrouter not found"

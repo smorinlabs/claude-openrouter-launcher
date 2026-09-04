@@ -245,6 +245,16 @@ col_provider_match() {
     '[$cfg | to_entries[] | $live[.key] == .value] | all' >/dev/null 2>&1
 }
 
+# col_fusion_knobs_match <live_parameters_json> <configured_knobs_json> — true
+# iff the managed Fusion tuning knobs match in both directions. OpenRouter may
+# add unrelated parameters, but a managed knob present on only one side is drift.
+col_fusion_knobs_match() {
+  jq -ne --argjson live "$1" --argjson cfg "$2" '
+    ($live
+      | {max_tool_calls, temperature, max_completion_tokens, reasoning}
+      | with_entries(select(.value != null))) == $cfg' >/dev/null 2>&1
+}
+
 # col_list_modes — print the modes from config with their slot mappings.
 col_list_modes() {
   if [ "${1:-0}" = "1" ]; then
@@ -504,7 +514,7 @@ col_doctor() {
                      max_completion_tokens: .max_completion_tokens, reasoning: .reasoning}
                   | with_entries(select(.value != null))' "$COL_CONFIG")"
                 if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ] \
-                  && col_provider_match "$live_knobs" "$cfg_knobs"; then
+                  && col_fusion_knobs_match "$live_knobs" "$cfg_knobs"; then
                   _d_ok "preset '$slug' matches config (panel + judge in sync)"
                 else
                   _d_warn "preset '$slug' differs from config — run claude-openrouter preset apply $prof to sync"
@@ -516,7 +526,7 @@ col_doctor() {
                     _d_det "judge (config): $cfg_judge"
                     _d_det "judge (live):   $live_judge"
                   fi
-                  if ! col_provider_match "$live_knobs" "$cfg_knobs"; then
+                  if ! col_fusion_knobs_match "$live_knobs" "$cfg_knobs"; then
                     _d_det "knobs (config): $cfg_knobs"
                     _d_det "knobs (live):   $live_knobs"
                   fi

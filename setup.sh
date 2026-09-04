@@ -139,7 +139,7 @@ for prof in "${profiles_to_do[@]}"; do
     cfg_panel="$(echo "$panel" | jq -r 'join(", ")')"
     if [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] \
        && [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$judge" ] && [ "$live_tc" = "required" ] \
-       && col_provider_match "$live_knobs" "$knobs"; then
+       && col_fusion_knobs_match "$live_knobs" "$knobs"; then
       ok=1
     fi
   else

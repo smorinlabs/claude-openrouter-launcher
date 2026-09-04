@@ -213,18 +213,20 @@ col_preset_other_profile_for_slug() {
 }
 
 col_preset_sync_status() {
-  local profile="$1" remote_config="$2" type cfg_model cfg_provider
+  local profile="$1" remote_config="$2" type cfg_model cfg_provider cfg_knobs remote_knobs
   [ -n "$profile" ] || { printf 'orphan'; return 0; }
   type="$(col_profile_type "$profile")"
   case "$type" in
     fusion)
+      cfg_knobs="$(jq -c --arg p "$profile" '.profiles[$p]
+        | {max_tool_calls: .max_tool_calls, temperature: .temperature,
+           max_completion_tokens: .max_completion_tokens, reasoning: .reasoning}
+        | with_entries(select(.value != null))' "$COL_CONFIG")"
+      remote_knobs="$(printf '%s' "$remote_config" | jq -c '
+        ([.tools[]? | select(.type == "openrouter:fusion") | .parameters][0] // {})')"
       if jq -ne --argjson remote "$remote_config" \
         --argjson panel "$(jq -c --arg p "$profile" '.profiles[$p].panel_models' "$COL_CONFIG")" \
-        --arg judge "$(col_cfg --arg p "$profile" '.profiles[$p].judge_model')" \
-        --argjson knobs "$(jq -c --arg p "$profile" '.profiles[$p]
-          | {max_tool_calls: .max_tool_calls, temperature: .temperature,
-             max_completion_tokens: .max_completion_tokens, reasoning: .reasoning}
-          | with_entries(select(.value != null))' "$COL_CONFIG")" '
+        --arg judge "$(col_cfg --arg p "$profile" '.profiles[$p].judge_model')" '
           $remote.model == "openrouter/fusion"
           and $remote.tool_choice == "required"
           and ([ $remote.tools[]?
@@ -232,11 +234,8 @@ col_preset_sync_status() {
                  | .parameters.analysis_models ][0] == $panel)
           and ([ $remote.tools[]?
                  | select(.type == "openrouter:fusion")
-                 | .parameters.model ][0] == $judge)
-          and (([$remote.tools[]?
-                 | select(.type == "openrouter:fusion")
-                 | .parameters][0] // {}) as $params
-                | ([$knobs | to_entries[] | $params[.key] == .value] | all))' >/dev/null 2>&1; then
+                 | .parameters.model ][0] == $judge)' >/dev/null 2>&1 \
+        && col_fusion_knobs_match "$remote_knobs" "$cfg_knobs"; then
         printf 'in-sync'
       else
         printf 'drifted'
@@ -283,7 +282,7 @@ col_preset_list_command() {
 }
 
 col_preset_view_command() {
-  local profile="" slug="" keyfile="" output="table" key response remote local_json status type
+  local profile="" slug="" keyfile="" output="table" key response remote local_json status type remote_knobs
   while [ $# -gt 0 ]; do
     case "$1" in
       --slug) col_preset_need_value "$1" "$#"; slug="$2"; shift 2 ;;
@@ -397,48 +396,73 @@ col_preset_apply_panel_edits() {
   missing="$(jq -nc --argjson base "$base_json" --argjson remove "$remove_json" \
     '[$remove[] | select(. as $r | ($base | index($r)) == null)]')"
   [ "$(printf '%s' "$missing" | jq -r 'length')" -eq 0 ] \
-    || col_preset_fail 1 "not_found" "panel of profile '$profile' has no model $(printf '%s' "$missing" | jq -r '.[0]') — nothing changed"
+    || col_preset_fail 3 "not_found" "panel of profile '$profile' has no model $(printf '%s' "$missing" | jq -r '.[0]') — nothing changed"
   merged="$(jq -nc --argjson base "$base_json" --argjson add "$add_json" --argjson remove "$remove_json" \
-    '($base - $remove) as $kept | $kept + [$add[] | select(. as $a | ($kept | index($a)) == null)]')"
+    '($base - $remove) | reduce $add[] as $a (.; if index($a) == null then . + [$a] else . end)')"
   printf '%s' "$merged" | jq -r 'join(",")'
 }
 
-col_preset_write_profile() {
-  local profile="$1" profile_json="$2" source="$COL_CONFIG" target lock tmp
+col_preset_config_target() {
   if [ "$COL_CONFIG_SOURCE" = "example" ]; then
-    target="$COL_ROOT/config/modes.json"
+    printf '%s' "$COL_ROOT/config/modes.json"
   else
-    target="$COL_CONFIG"
+    printf '%s' "$COL_CONFIG"
   fi
+}
+
+col_preset_release_config_lock() {
+  if [ -n "${COL_PRESET_LOCK_DIR:-}" ]; then
+    rmdir "$COL_PRESET_LOCK_DIR" 2>/dev/null || true
+    COL_PRESET_LOCK_DIR=""
+  fi
+  trap - EXIT INT TERM
+}
+
+col_preset_acquire_config_lock() {
+  local target lock
+  target="$(col_preset_config_target)"
   mkdir -p "$(dirname "$target")"
   lock="$target.lock"
   if ! mkdir "$lock" 2>/dev/null; then
     col_preset_fail 5 "config_locked" "configuration is locked by another process: $lock"
   fi
+  COL_PRESET_LOCK_DIR="$lock"
+  trap 'col_preset_release_config_lock' EXIT
+  trap 'col_preset_release_config_lock; exit 130' INT
+  trap 'col_preset_release_config_lock; exit 143' TERM
+}
+
+col_preset_write_profile() {
+  local profile="$1" profile_json="$2" source="$COL_CONFIG" target lock tmp
+  target="$(col_preset_config_target)"
+  mkdir -p "$(dirname "$target")"
+  lock="$target.lock"
+  if [ "${COL_PRESET_LOCK_DIR:-}" != "$lock" ]; then
+    col_preset_acquire_config_lock
+  fi
   tmp="$(mktemp "$target.tmp.XXXXXX")" || {
-    rmdir "$lock" 2>/dev/null || true
+    col_preset_release_config_lock
     col_preset_fail 1 "config_write_failed" "could not create a temporary file beside $target"
   }
-  trap 'rm -f "$tmp"; rmdir "$lock" 2>/dev/null || true; exit 130' INT
-  trap 'rm -f "$tmp"; rmdir "$lock" 2>/dev/null || true; exit 143' TERM
+  trap 'rm -f "$tmp"; col_preset_release_config_lock; exit 130' INT
+  trap 'rm -f "$tmp"; col_preset_release_config_lock; exit 143' TERM
   if ! jq --arg profile "$profile" --argjson value "$profile_json" \
       '.profiles[$profile] = $value' "$source" > "$tmp"; then
     rm -f "$tmp"
-    rmdir "$lock" 2>/dev/null || true
+    col_preset_release_config_lock
     col_preset_fail 1 "config_write_failed" "could not update profile '$profile' in $source"
   fi
   if [ -f "$target" ] && ! cp -p "$target" "$target.bak"; then
     rm -f "$tmp"
-    rmdir "$lock" 2>/dev/null || true
+    col_preset_release_config_lock
     col_preset_fail 1 "config_write_failed" "could not back up $target"
   fi
   if ! mv -f "$tmp" "$target"; then
     rm -f "$tmp"
-    rmdir "$lock" 2>/dev/null || true
+    col_preset_release_config_lock
     col_preset_fail 1 "config_write_failed" "could not replace $target"
   fi
-  trap - INT TERM
-  rmdir "$lock" 2>/dev/null || true
+  col_preset_release_config_lock
   COL_CONFIG="$target"
   COL_CONFIG_SOURCE="explicit"
   COL_CONFIG_WRITE_RESULT="$target"
@@ -499,7 +523,7 @@ col_preset_mutation_command() {
   local add_set=0 remove_set=0
   local mtc_set=0 temp_set=0 mct_set=0 reff_set=0 rmt_set=0
   local dry_run=0 assume_yes=0 no_input=0 exists=0 interactive=0 current="{}" profile_json
-  local current_type="" current_slug="" conflicting_profile providers_json panel_json
+  local current_type="" current_slug="" conflicting_profile providers_json panel_json knobs_json
   local key answer applied_slug preset_check_rc
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -550,6 +574,10 @@ col_preset_mutation_command() {
   col_preset_validate_output "$output"
   [ "$output" != "name" ] || col_preset_fail 2 "usage" "preset $action supports table or json output"
   col_require jq
+  # Non-dry-run mutations lock before the first config read. Otherwise two
+  # callers can each build a complete profile from stale state and silently
+  # overwrite the earlier successful update.
+  if [ "$dry_run" -eq 0 ]; then col_preset_acquire_config_lock; fi
   col_preset_load_config
   if [ "$no_input" -eq 0 ] && [ -t 0 ]; then interactive=1; fi
   if [ -z "$profile" ]; then
@@ -687,6 +715,7 @@ col_preset_mutation_command() {
     case "$answer" in
       y|Y|yes|YES|Yes) ;;
       *)
+        col_preset_release_config_lock
         if [ "$COL_PRESET_OUTPUT" = "json" ]; then
           jq -n --arg action "$action" --arg profile "$profile" \
             '{ok:false, action:$action, profile:$profile, confirmed:false}'

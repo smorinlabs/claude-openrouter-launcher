@@ -11,8 +11,18 @@
 # config, no jq, malformed JSON) so TAB degrades to "no matches" instead of
 # spraying errors over the command line the user is still typing.
 _claude_openrouter_names() {
-  local -a out
-  out=( ${(f)"$( ${words[1]} $1 --json 2>/dev/null | jq -r 'keys[]?' 2>/dev/null )"} )
+  local -a out config_args
+  local i
+  for (( i = 2; i <= ${#words}; i++ )); do
+    case "${words[i]}" in
+      --config)
+        if (( i < ${#words} )); then config_args=(--config "${words[i + 1]}"); fi
+        (( i++ ))
+        ;;
+      --config=*) config_args=("${words[i]}") ;;
+    esac
+  done
+  out=( ${(f)"$( ${words[1]} ${config_args[@]} $1 --json 2>/dev/null | jq -r 'keys[]?' 2>/dev/null )"} )
   (( ${#out} )) && print -rl -- $out
 }
 
@@ -93,7 +103,7 @@ _claude-openrouter() {
             view)
               _arguments \
                 '1:preset command:(list view create update apply)' \
-                "2:profile:(${preset_profiles})" \
+                "3::profile:(${preset_profiles})" \
                 '--slug[remote preset slug]:slug:' \
                 '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
                 '--config[explicit launcher configuration]:file:_files' \
@@ -104,7 +114,7 @@ _claude-openrouter() {
             create)
               _arguments \
                 '1:preset command:(list view create update apply)' \
-                '2:new profile name:' \
+                '3:new profile name:' \
                 '--type[profile type]:type:(preset fusion)' \
                 '--preset-slug[remote preset slug]:slug:' \
                 '--model[model slug for a provider-pinned preset]:slug:' \
@@ -129,7 +139,7 @@ _claude-openrouter() {
             update)
               _arguments \
                 '1:preset command:(list view create update apply)' \
-                "2:profile:(${preset_profiles})" \
+                "3:profile:(${preset_profiles})" \
                 '--type[profile type]:type:(preset fusion)' \
                 '--preset-slug[remote preset slug]:slug:' \
                 '--model[model slug for a provider-pinned preset]:slug:' \
@@ -156,7 +166,7 @@ _claude-openrouter() {
             apply)
               _arguments \
                 '1:preset command:(list view create update apply)' \
-                "2:profile:(${preset_profiles})" \
+                "3::profile:(${preset_profiles})" \
                 '--all[apply every preset-backed profile]' \
                 '--key-file[file containing OPENROUTER_API_KEY]:file:_files' \
                 '--config[explicit launcher configuration]:file:_files' \
