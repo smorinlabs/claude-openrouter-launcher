@@ -162,20 +162,46 @@ Providers for z-ai/glm-5.2 (28 serving):
 
 > OpenRouter returns `throughput`/`latency` as `null` on this endpoint, so there's no speed column — `uptime` is the perf signal that's actually populated. (Use `:nitro` on a model slug if you want throughput-sorted routing.)
 
-### Listing your account's presets
+### Comparing remote presets and local profiles
 
-`preset list` lists the OpenRouter presets on your **account** and cross-references them against your config — surfacing what `profiles` (config-side) and `doctor` (only checks *referenced* presets) can't:
+`preset list` shows one inventory built from both the remote OpenRouter account
+and the local launcher configuration:
 
 ```bash
 claude-openrouter preset list --key-file ~/.config/openrouter.env
 ```
+```text
+Presets
+
+Remote source: OpenRouter account for the resolved API key
+Local source:  /path/to/claude-openrouter-launcher/config/modes.json
+
+PRESET SLUG                      OPENROUTER  LOCAL PROFILE  LINK STATE
+cc-fusion                        present     fusion         linked
+cc-fusion-probe                  present     (none)         not linked to this config
+cc-glm-fireworks                 present     glm-fireworks  linked
+cc-manual-test-20260903220944    present     (none)         not linked to this config
+
+Summary: 4 preset slugs · 2 linked · 2 not linked · 0 missing from OpenRouter
+
+Inspect a linked preset:       claude-openrouter preset view <local-profile>
+Inspect an unlinked preset:    claude-openrouter preset view --slug <preset-slug>
 ```
-Presets (OpenRouter account — 3 total):
-  cc-fusion         ← profile: fusion
-  cc-glm-fireworks  ← profile: glm-fireworks
-  cc-fusion-probe   ⚠ orphan — no profile references it
-```
-**orphan** = on your account but no profile points at it (harmless leftovers, e.g. after a slug rename). **missing** = a profile references it but it isn't on the account → run `claude-openrouter preset apply <name>`.
+
+The columns have distinct meanings:
+
+| Column | Meaning |
+|---|---|
+| `PRESET SLUG` | The identifier used to connect a local profile to an OpenRouter preset. The inventory includes every slug found in either source. |
+| `OPENROUTER` | `present` when the preset exists in the remote account; otherwise `missing`. |
+| `LOCAL PROFILE` | The profile name in the local configuration, or `(none)` when this configuration does not reference the slug. |
+| `LINK STATE` | The relationship between the remote preset and local profile: `linked`, `not linked to this config`, or `missing from OpenRouter`. |
+
+When a local profile is `missing from OpenRouter`, the output also shows
+`claude-openrouter preset apply <local-profile>` as the synchronization command.
+On a narrow terminal, the same fields appear as stacked records instead of a
+wide table. `--json` and `-o name` retain their remote-account-only formats for
+scripts.
 
 > **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
 >
@@ -188,7 +214,7 @@ Presets (OpenRouter account — 3 total):
 identifies the remote OpenRouter preset.
 
 ```bash
-claude-openrouter preset list                         # account presets + local links
+claude-openrouter preset list                         # remote presets + local profiles
 claude-openrouter preset list -o name                 # slugs only, sorted
 claude-openrouter preset view fusion                  # local + remote config and drift
 claude-openrouter preset view --slug cc-orphan --json # inspect an unlinked preset

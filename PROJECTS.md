@@ -153,26 +153,29 @@ See `docs/superpowers/specs/2026-07-15-models-discovery-command-design.md`.
 ---
 
 ## [x] Project P07: account presets command (v0.5.0)
-**Goal/Requirement**: Add a `presets` subcommand listing the OpenRouter presets on your
-**account** (`GET /api/v1/presets`), cross-referenced against config profiles — surfacing
-**orphans** (on the account, unreferenced) and **missing** (referenced, absent upstream).
-Neither `profiles` (config-side) nor `doctor` (only checks referenced presets) can see these.
+**Goal/Requirement**: Add a `presets` subcommand that compares the OpenRouter presets on
+the account (`GET /api/v1/presets`) with locally configured profiles. Human output is a
+unified inventory with explicit remote and local sources. Each slug reports `linked`,
+`not linked to this config`, or `missing from OpenRouter`.
 
 **Out of Scope**
 - Deleting/creating presets (setup.sh creates; deletion stays on the OpenRouter dashboard).
-- Listing config-side presets — `profiles` already does that.
+- Changing the remote-account-only data returned by `--json` and `-o name`.
 
 ### Tests & Tasks
-- [x] [P07-T01] `col_list_presets <key> <json>` in `lib/common.sh`: account fetch, config cross-reference, linked/orphan/missing states
+- [x] [P07-T01] `col_list_presets <key> <format>` in `lib/common.sh`: account fetch,
+      remote/local union, explicit columns and link states, adaptive table/stacked layout
 - [x] [P07-T02] `presets)` subcommand (`--key`/`--key-file`/`--json`); `usage()` + README section
-- [x] [P07-TS01] `tests/smoke.sh`: stubbed account list → linked / orphan / missing lines; `--json` array
+- [x] [P07-TS01] `tests/smoke.sh`: source labels, all link states, sorted union,
+      summary, conditional hints, narrow layout, and unchanged `--json` array
 
 ### Automated Verification
 - `make check`, then `just all` (shellcheck + smoke) pass.
 
 ### Manual Verification
-- `bin/claude-openrouter presets --key-file ~/.config/smorin/.env` → links `cc-fusion`→`fusion`,
-  `cc-glm-fireworks`→`glm-fireworks`, and flags the `cc-fusion-probe` orphan.
+- `bin/claude-openrouter presets --key-file ~/.config/smorin/.env` labels the remote
+  OpenRouter source and local config path, then shows each preset slug beside its local
+  profile and literal link state.
 
 ---
 
@@ -286,11 +289,13 @@ preset-backed profiles without editing JSON by hand.
       safe config writes, create/update, and apply orchestration
 - [x] [P09-T02] `bin/claude-openrouter`: canonical group dispatch and global
       `--config FILE`
-- [x] [P09-T03] `lib/common.sh`: sorted preset formats and canonical recovery hints
+- [x] [P09-T03] `lib/common.sh`: sorted preset formats, unified human inventory,
+      adaptive table/stacked rendering, and canonical recovery hints
 - [x] [P09-T04] zsh action/flag/profile completion; README lifecycle documentation;
       approved design record
-- [x] [P09-TS01] no-cost smoke coverage for list/view/create/update/apply, dry-run,
-      conflicts, locking, JSON errors, remote failure recovery, and readiness markers
+- [x] [P09-TS01] no-cost smoke coverage for list/view/create/update/apply, adaptive
+      inventory rendering, dry-run, conflicts, locking, JSON errors, remote failure
+      recovery, and readiness markers
 - [x] [P09-TS02] Live verification (2026-09-04): `cc-live-probe` created,
       `preset view` `in-sync`, updated, `preset apply` recreated readiness
       (plus P10/P11 live steps on the same preset)

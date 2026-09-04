@@ -381,13 +381,57 @@ col_list_providers() {
   return 0
 }
 
-# col_list_presets <key> <json> — list the OpenRouter presets on the account and
-# cross-reference them against the config's preset-backed profiles. Surfaces what
-# neither 'profiles' (config-side) nor doctor (only checks referenced presets) can:
-# orphans (on the account, unreferenced) and missing (referenced, absent upstream).
-# <format> is 0/table, 1/json, or name. Needs a key.
+# col_render_preset_inventory <rows-json> <local-source> [terminal-width] — render
+# the human preset inventory. A numeric terminal width selects stacked records when
+# the complete table would not fit; an empty width keeps deterministic table output
+# for pipes and redirected output.
+col_render_preset_inventory() {
+  local rows="$1" local_source="$2" terminal_width="${3:-}" required_width layout="table"
+  required_width="$(printf '%s' "$rows" | jq -r '
+    (["PRESET SLUG"] + map(.slug) | map(length) | max) as $sw
+    | (["OPENROUTER"] + map(.openrouter) | map(length) | max) as $ow
+    | (["LOCAL PROFILE"] + map(.profile) | map(length) | max) as $pw
+    | (["LINK STATE"] + map(.state) | map(length) | max) as $lw
+    | $sw + $ow + $pw + $lw + 6')"
+  case "$terminal_width" in
+    ''|*[!0-9]*) ;;
+    *) [ "$terminal_width" -ge "$required_width" ] || layout="stacked" ;;
+  esac
+
+  printf 'Presets\n\n'
+  printf 'Remote source: OpenRouter account for the resolved API key\n'
+  printf 'Local source:  %s\n\n' "$local_source"
+
+  if [ "$layout" = "stacked" ]; then
+    printf '%s' "$rows" | jq -r '
+      map("Preset slug:    \(.slug)\nOpenRouter:     \(.openrouter)\nLocal profile:  \(.profile)\nLink state:     \(.state)")
+      | join("\n\n")'
+  else
+    printf '%s' "$rows" | jq -r '
+      def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
+      (["PRESET SLUG"] + map(.slug) | map(length) | max) as $sw
+      | (["OPENROUTER"] + map(.openrouter) | map(length) | max) as $ow
+      | (["LOCAL PROFILE"] + map(.profile) | map(length) | max) as $pw
+      | "\("PRESET SLUG" | pad($sw))  \("OPENROUTER" | pad($ow))  \("LOCAL PROFILE" | pad($pw))  LINK STATE",
+        (.[] | "\(.slug | pad($sw))  \(.openrouter | pad($ow))  \(.profile | pad($pw))  \(.state)")'
+  fi
+
+  printf '%s' "$rows" | jq -r '
+    length as $total
+    | (map(select(.state == "linked")) | length) as $linked
+    | (map(select(.state == "not linked to this config")) | length) as $unlinked
+    | (map(select(.state == "missing from OpenRouter")) | length) as $missing
+    | "\nSummary: \($total) preset slug\(if $total == 1 then "" else "s" end) · \($linked) linked · \($unlinked) not linked · \($missing) missing from OpenRouter\n",
+      (if $linked > 0 then "Inspect a linked preset:       claude-openrouter preset view <local-profile>" else empty end),
+      (if $unlinked > 0 then "Inspect an unlinked preset:    claude-openrouter preset view --slug <preset-slug>" else empty end),
+      (if $missing > 0 then "Synchronize a missing preset:  claude-openrouter preset apply <local-profile>" else empty end)'
+}
+
+# col_list_presets <key> <format> — list the union of remote OpenRouter preset
+# slugs and locally configured preset slugs. Human output makes each source and
+# relationship explicit. <format> is 0/table, 1/json, or name. Needs a key.
 col_list_presets() {
-  local key="$1" format="${2:-0}" resp arr cfg
+  local key="$1" format="${2:-0}" resp arr cfg rows terminal_width=""
   resp="$(col_or_get "$key" "presets" 2>/dev/null)" \
     || {
       if command -v col_preset_fail >/dev/null 2>&1 && [ "${COL_PRESET_CONTEXT:-0}" = "1" ]; then
@@ -411,20 +455,28 @@ col_list_presets() {
     | select(.value.type == "fusion" or .value.type == "preset")
     | {slug: (.value.preset_slug // ""), profile: .key}]
     | map(select(.slug != ""))' "$COL_CONFIG")"
-  printf 'Presets (OpenRouter account — %s total):\n' "$(printf '%s' "$arr" | jq -r 'length')"
-  jq -rn --argjson acct "$arr" --argjson cfg "$cfg" '
-    def pad($n): . as $s | if ($s | length) >= $n then $s else $s + (" " * ($n - ($s | length))) end;
-    ($acct | map(.slug)) as $aslugs
-    | ((($acct | map(.slug | length)) + ($cfg | map(.slug | length))) | max // 0) as $w
-    | ( $acct[]
-        | .slug as $s
-        | ([$cfg[] | select(.slug == $s) | .profile] | first) as $p
-        | if $p != null then "  \($s | pad($w))  ← profile: \($p)"
-          else "  \($s | pad($w))  ⚠ orphan — no profile references it" end )
-    , ( $cfg[]
-        | select(.slug as $s | ($aslugs | index($s)) == null)
-        | "  \(.slug | pad($w))  ✗ missing — profile: \(.profile) — run claude-openrouter preset apply \(.profile)" )'
-  echo "  (orphans are harmless; delete them at https://openrouter.ai/settings/presets)"
+  rows="$(jq -cn --argjson acct "$arr" --argjson cfg "$cfg" '
+    ((($acct | map(.slug)) + ($cfg | map(.slug))) | unique | sort) as $slugs
+    | [$slugs[] as $slug
+      | ([$cfg[] | select(.slug == $slug) | .profile] | unique | sort) as $profiles
+      | ($acct | any(.slug == $slug)) as $remote
+      | {
+          slug: $slug,
+          openrouter: (if $remote then "present" else "missing" end),
+          profile: (if ($profiles | length) > 0 then ($profiles | join(", ")) else "(none)" end),
+          state: (if $remote and (($profiles | length) > 0) then "linked"
+                  elif $remote then "not linked to this config"
+                  else "missing from OpenRouter" end)
+        }]')"
+  if [ -t 1 ]; then
+    case "${COLUMNS:-}" in
+      ''|*[!0-9]*)
+        if command -v tput >/dev/null 2>&1; then terminal_width="$(tput cols 2>/dev/null || true)"; fi
+        ;;
+      *) terminal_width="$COLUMNS" ;;
+    esac
+  fi
+  col_render_preset_inventory "$rows" "$COL_CONFIG" "$terminal_width"
   return 0
 }
 

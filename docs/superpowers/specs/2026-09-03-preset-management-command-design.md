@@ -3,8 +3,7 @@
 **Date:** 2026-09-03  
 **Target version:** v0.8.0  
 **Project:** P09  
-**Status:** approved and implemented  
-**CLI standard:** v1.4.14, standard tier for this command group
+**Status:** approved and implemented
 
 ## Purpose
 
@@ -104,6 +103,27 @@ The canonical mutation commands accept `--key-file` or `OPENROUTER_API_KEY`; the
 do not accept a plaintext key argument. The legacy commands retain their existing
 `--key` behavior for compatibility.
 
+### Preset-list human output
+
+`preset list` human output is the sorted union of remote OpenRouter preset slugs
+and locally configured preset slugs. It names both sources, then shows four fields:
+
+| Field | Value |
+|---|---|
+| `PRESET SLUG` | The shared identifier from either source |
+| `OPENROUTER` | `present` or `missing` |
+| `LOCAL PROFILE` | The configured profile name or `(none)` |
+| `LINK STATE` | `linked`, `not linked to this config`, or `missing from OpenRouter` |
+
+The output ends with counts for all three link states. It prints only the action
+hints relevant to states present in the result: inspect by local profile, inspect
+by remote slug, or synchronize the missing preset with `preset apply`.
+
+When the calculated table width fits the terminal, the fields are columns. On a
+narrow terminal, each preset is a stacked record with the same four labels.
+Redirected and piped human output uses the deterministic table layout. The `json`
+and `name` formats remain remote-account-only and unchanged.
+
 ## Implementation
 
 - `lib/presets.sh` owns parsing, prompting, validation, views, safe local writes,
@@ -130,4 +150,3 @@ The no-cost smoke suite uses a fake `curl` implementation and covers:
 
 The suite never calls the live OpenRouter API. A live account verification remains a
 separate manual release check because it changes remote account state.
-

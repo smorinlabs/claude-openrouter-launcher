@@ -25,7 +25,7 @@ Usage:
   claude-openrouter preset <command> [flags]
 
 Commands:
-  list                 List account presets and their local profile links
+  list                 Compare remote presets with locally configured profiles
   view                 Show one preset and its local synchronization status
   create               Interactively or declaratively create a managed preset
   update               Interactively or declaratively update a managed preset
@@ -41,7 +41,7 @@ EOF
 
 col_preset_list_usage() {
   cat <<'EOF'
-List OpenRouter account presets and their local profile links.
+Compare remote OpenRouter presets with locally configured profiles.
 
 Usage:
   claude-openrouter preset list [--key-file FILE] [--config FILE] [-o table|json|name]

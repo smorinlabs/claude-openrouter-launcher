@@ -837,8 +837,7 @@ else
   bad "providers: --json + arg/sort/404 errors" "json=$vj noslug=$v_noslug badsort=$v_badsort 404=$v_404"
 fi
 
-# 29. 'presets' — account listing cross-referenced against config profiles:
-#     linked / orphan (on account, unreferenced) / missing (referenced, absent upstream).
+# 29. Human preset inventory — explicit remote/local sources and literal link states.
 prebin="$tmpstate/presets-bin"; mkdir -p "$prebin"
 cat > "$prebin/curl" <<'EOS'
 #!/usr/bin/env bash
@@ -851,13 +850,38 @@ esac
 EOS
 chmod +x "$prebin/curl"
 p_out="$(PATH="$prebin:$PATH" bin/claude-openrouter presets --key test 2>&1)"
-if [[ "$p_out" == *"2 total"* \
-   && "$p_out" == *"cc-fusion"*"← profile: fusion"* \
-   && "$p_out" == *"cc-orphan"*"orphan"* \
-   && "$p_out" == *"cc-glm-fireworks"*"missing"*"glm-fireworks"* ]]; then
-  ok "presets: linked / orphan / missing"
+if [[ "$p_out" == *$'Remote source: OpenRouter account for the resolved API key'* \
+   && "$p_out" == *"Local source:  $COL_CONFIG"* \
+   && "$p_out" == *"Summary: 3 preset slugs · 1 linked · 1 not linked · 1 missing from OpenRouter"* \
+   && "$p_out" == *"Inspect a linked preset:"* \
+   && "$p_out" == *"Inspect an unlinked preset:"* \
+   && "$p_out" == *"Synchronize a missing preset:"* \
+   && "$p_out" != *"https://openrouter.ai/settings/presets"* ]] \
+  && printf '%s\n' "$p_out" | grep -Eq '^PRESET SLUG +OPENROUTER +LOCAL PROFILE +LINK STATE$' \
+  && printf '%s\n' "$p_out" | grep -Eq '^cc-fusion +present +fusion +linked$' \
+  && printf '%s\n' "$p_out" | grep -Eq '^cc-glm-fireworks +missing +glm-fireworks +missing from OpenRouter$' \
+  && printf '%s\n' "$p_out" | grep -Eq '^cc-orphan +present +\(none\) +not linked to this config$' \
+  && [ "$(printf '%s\n' "$p_out" | grep -n '^cc-' | cut -d: -f2-)" = \
+       $'cc-fusion         present     fusion         linked\ncc-glm-fireworks  missing     glm-fireworks  missing from OpenRouter\ncc-orphan         present     (none)         not linked to this config' ]; then
+  ok "presets: unified remote/local inventory"
 else
-  bad "presets: linked / orphan / missing" "$p_out"
+  bad "presets: unified remote/local inventory" "$p_out"
+fi
+
+stacked_rows='[{"slug":"cc-fusion","openrouter":"present","profile":"fusion","state":"linked"},{"slug":"cc-orphan","openrouter":"present","profile":"(none)","state":"not linked to this config"}]'
+wide_out="$(col_render_preset_inventory "$stacked_rows" "/tmp/modes.json" 200)"
+stacked_out="$(col_render_preset_inventory "$stacked_rows" "/tmp/modes.json" 60)"
+if [[ "$wide_out" == *"PRESET SLUG"* && "$wide_out" != *"Preset slug:"* \
+   && "$stacked_out" == *$'Preset slug:    cc-fusion\nOpenRouter:     present\nLocal profile:  fusion\nLink state:     linked'* \
+   && "$stacked_out" == *$'Preset slug:    cc-orphan\nOpenRouter:     present\nLocal profile:  (none)\nLink state:     not linked to this config'* \
+   && "$stacked_out" == *"Summary: 2 preset slugs · 1 linked · 1 not linked · 0 missing from OpenRouter"* \
+   && "$stacked_out" == *"Inspect a linked preset:"* \
+   && "$stacked_out" == *"Inspect an unlinked preset:"* \
+   && "$stacked_out" != *"PRESET SLUG"* \
+   && "$stacked_out" != *"Synchronize a missing preset:"* ]]; then
+  ok "presets: narrow stacked layout + conditional hints"
+else
+  bad "presets: narrow stacked layout + conditional hints" "wide=$wide_out stacked=$stacked_out"
 fi
 
 p_json="$(PATH="$prebin:$PATH" bin/claude-openrouter presets --key test --json 2>/dev/null)"
