@@ -1403,37 +1403,45 @@ if [ -f completions/_claude-openrouter ]; then
   else
     bad "completion: preset actions and flags offered"
   fi
-  completion_global_cfg="$(zsh -c '
-    compdef() { :; }
-    _arguments() { return 0; }
-    source "$1/completions/_claude-openrouter"
-    fake_launcher() {
-      if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
-      else print '\''{"default-only":{}}'\''; fi
-    }
-    words=(fake_launcher --config /tmp/other.json preset update)
-    _claude_openrouter_names profiles
-  ' _ "$COL_ROOT")"
-  completion_local_cfg="$(zsh -c '
-    compdef() { :; }
-    _arguments() { return 0; }
-    source "$1/completions/_claude-openrouter"
-    fake_launcher() {
-      if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
-      else print '\''{"default-only":{}}'\''; fi
-    }
-    words=(fake_launcher preset update --config=/tmp/other.json)
-    _claude_openrouter_names profiles
-  ' _ "$COL_ROOT")"
-  if [ "$completion_global_cfg" = "other-only" ] && [ "$completion_local_cfg" = "other-only" ] \
-    && grep -q '"3::profile:' completions/_claude-openrouter \
+  if grep -q '"3::profile:' completions/_claude-openrouter \
     && [ "$(grep -c '3::profile:' completions/_claude-openrouter)" -eq 2 ] \
     && [ "$(grep -c '3:profile:' completions/_claude-openrouter)" -eq 1 ] \
     && grep -q "3:new profile name:" completions/_claude-openrouter; then
-    ok "completion: nested positions + explicit config"
+    ok "completion: nested argument positions"
   else
-    bad "completion: nested positions + explicit config" \
-      "global=$completion_global_cfg local=$completion_local_cfg"
+    bad "completion: nested argument positions"
+  fi
+  if command -v zsh >/dev/null 2>&1; then
+    completion_global_cfg="$(zsh -c '
+      compdef() { :; }
+      _arguments() { return 0; }
+      source "$1/completions/_claude-openrouter"
+      fake_launcher() {
+        if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
+        else print '\''{"default-only":{}}'\''; fi
+      }
+      words=(fake_launcher --config /tmp/other.json preset update)
+      _claude_openrouter_names profiles
+    ' _ "$COL_ROOT")"
+    completion_local_cfg="$(zsh -c '
+      compdef() { :; }
+      _arguments() { return 0; }
+      source "$1/completions/_claude-openrouter"
+      fake_launcher() {
+        if [[ "$1" == --config* ]]; then print '\''{"other-only":{}}'\''
+        else print '\''{"default-only":{}}'\''; fi
+      }
+      words=(fake_launcher preset update --config=/tmp/other.json)
+      _claude_openrouter_names profiles
+    ' _ "$COL_ROOT")"
+    if [ "$completion_global_cfg" = "other-only" ] && [ "$completion_local_cfg" = "other-only" ]; then
+      ok "completion: explicit config runtime"
+    else
+      bad "completion: explicit config runtime" \
+        "global=$completion_global_cfg local=$completion_local_cfg"
+    fi
+  else
+    note "completion: explicit config runtime" "skipped (zsh not installed)"
   fi
 else
   bad "completion: file present" "completions/_claude-openrouter not found"
