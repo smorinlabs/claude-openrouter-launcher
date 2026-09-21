@@ -11,7 +11,10 @@ jobs:
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y curl shellcheck jq
       - uses: extractions/setup-just@v2
+      # reviewdog reports on the PR diff; on push events it has no PR
+      # context and fails the job, duplicating the pull_request run.
       - name: actionlint
+        if: github.event_name == 'pull_request'
         uses: reviewdog/action-actionlint@v1
         with:
           fail_level: error
