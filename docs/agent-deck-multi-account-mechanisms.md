@@ -204,10 +204,10 @@ that agent-deck's default slot owns.
 
 ### What it is
 
-`agent-deck session switch-account <session> <slot>` relocates a session's
-transcript from one home to another. It does not move an account, because
-the target account already exists in the target home from the one-time login
-in section 1.
+`agent-deck session switch-account <session> <slot>` copies a session's
+transcript from one home to another, leaving the source copy in place. It
+does not move an account, because the target account already exists in the
+target home from the one-time login in section 1.
 
 ### Context
 
