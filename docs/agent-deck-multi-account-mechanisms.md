@@ -190,8 +190,11 @@ fail with 401 once the other instance refreshed.
 ### What this gets you
 
 The rule "one credential, one owner" is the whole reason agent-deck never
-copies a credential and never lets two slots resolve to one directory. It
-also tells you which community tools are safe to combine with agent-deck:
+copies a credential between account slots and never lets two slots resolve
+to one directory. The single exception is the opt-in, one-time sandbox
+seeding path quoted above, which forks the host chain once by design and is
+never repeated. The rule also tells you which community tools are safe to
+combine with agent-deck:
 none of the in-place swappers, because they rewrite the default home's item
 that agent-deck's default slot owns.
 
@@ -305,5 +308,5 @@ checks only byte counts, and only migrates when the tool string is literally
 ### What this gets you
 
 A switch that cannot lose or corrupt a conversation, leaves a journal to
-inspect after a crash, and never reads or writes a credential. The account
+inspect after a crash, and never reads or writes a credential itself. The account
 is expressed only as which directory the restarted process is pointed at.
